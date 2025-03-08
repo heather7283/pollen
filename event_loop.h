@@ -60,7 +60,6 @@
 #if defined(EVENT_LOOP_ENABLE_LOGGING)
     #if !defined(EVENT_LOOP_DEBUG) || !defined(EVENT_LOOP_WARN) || !defined(EVENT_LOOP_ERR)
         #include <stdio.h> /* fprintf() */
-        #include <string.h> /* strerror() */
     #endif
 
     #if !defined(EVENT_LOOP_DEBUG)
@@ -148,6 +147,7 @@ void event_loop_quit(struct event_loop *loop, int retcode);
 #include <unistd.h>
 #include <stddef.h>
 #include <stdbool.h>
+#include <string.h>
 #include <fcntl.h>
 
 #define EVENT_LOOP_EPOLL_MAX_EVENTS 16
