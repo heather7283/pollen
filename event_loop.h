@@ -89,16 +89,24 @@ struct event_loop *event_loop_create(void);
 void event_loop_cleanup(struct event_loop *loop);
 
 /*
- * Add new callback to event loop.
+ * Add new callback to event loop. Returns NULL and sets errno on failure.
+ *
  * If fd >= 0, fd is added to epoll interest list.
- * If fd < 0, callback will run unconditionally on every event loop iteration.
- *   In this case, negated value of fd is treated as priority.
- *   Callbacks with higher priority will run before callbacks with lower priority.
- *   If two callbacks have equal priority, the order is undefined.
+ * Callback function will be called when fd becomes available for reading.
+ *
+ * If fd < 0, callback will run unconditionally on every event loop iteration,
+ * after all regular callbacks were dispatched.
+ * In this case, negated value of fd is treated as priority.
+ * Callbacks with higher priority will run before callbacks with lower priority.
+ * If two callbacks have equal priority, the order is undefined.
  */
 struct event_loop_item *event_loop_add_callback(struct event_loop *loop, int fd,
                                                 event_loop_callback_t callback, void *data);
-/* Remove a callback from event loop. */
+/*
+ * Remove a callback from event loop.
+ * If a callback has fd associated with it, this function will attempt to close it.
+ * If fd was already closed, a warning will be printed.
+ */
 void event_loop_remove_item(struct event_loop_item *item);
 
 /* Get event_loop instance associated with this event_loop_item. */
@@ -112,7 +120,7 @@ int event_loop_item_get_fd(struct event_loop_item *item);
 /*
  * Run the event loop. This function blocks until event loop exits.
  * This function returns 0 if no errors occured.
- * If any of the callbacs return negative value, the loop with be stopped and this value returned.
+ * If any of the callbacks return negative value, the loop with be stopped and this value returned.
  */
 int event_loop_run(struct event_loop *loop);
 /*
