@@ -22,6 +22,8 @@
  * SOFTWARE.
  *
  * event_loop.h version 0.2.2
+ * last version is available at: https://github.com/heather7283/event_loop.h
+ *
  * This is a single-header library that provides simple event loop abstraction built on epoll.
  * To use this library, do this in one C file:
  *   #define EVENT_LOOP_IMPLEMENTATION
