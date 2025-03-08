@@ -34,14 +34,13 @@
  *     Default: #define EVENT_LOOP_CALLOC(n, size) calloc(n, size)
  *   EVENT_LOOP_FREE(ptr) - free()-like function that will be used to free memory.
  *     Default: #define EVENT_LOOP_FREE(ptr) free(ptr)
- *   EVENT_LOOP_ENABLE_LOGGING - enables debug logging if defined.
- *     Default: not defined
- *   EVENT_LOOP_DEBUG(fmt, ...) - printf()-like function that will be used for debug logging.
- *     Default: fprintf(stderr, "event loop: " fmt "\n", ##__VA_ARGS__)
- *   EVENT_LOOP_ERR(fmt, ...) - printf()-like function that will be used for logging errors.
- *     Default: fprintf(stderr, "event loop: ERR: " fmt "\n", ##__VA_ARGS__)
- *   EVENT_LOOP_WARN(fmt, ...) - printf()-like function that will be used for logging warnings.
- *     Default: fprintf(stderr, "event loop: WARN: " fmt "\n", ##__VA_ARGS__)
+ *
+ *   Following macros will, if defined, be used for logging.
+ *   They must expand to printf()-like function, for example:
+ *   #define EVENT_LOOP_LOG_DEBUG(fmt, ...) fprintf(stderr, "event loop: " fmt "\n", ##__VA_ARGS__)
+ *     EVENT_LOOP_LOG_DEBUG(fmt, ...)
+ *     EVENT_LOOP_LOG_WARN(fmt, ...)
+ *     EVENT_LOOP_LOG_ERR(fmt, ...)
  */
 
 #ifndef EVENT_LOOP_H
@@ -50,36 +49,28 @@
 #if !defined(EVENT_LOOP_CALLOC) || !defined(EVENT_LOOP_FREE)
     #include <stdlib.h>
 #endif
-
 #if !defined(EVENT_LOOP_CALLOC)
     #define EVENT_LOOP_CALLOC(n, size) calloc(n, size)
 #endif
-
 #if !defined(EVENT_LOOP_FREE)
     #define EVENT_LOOP_FREE(ptr) free(ptr)
 #endif
 
-#if defined(EVENT_LOOP_ENABLE_LOGGING)
-    #if !defined(EVENT_LOOP_DEBUG) || !defined(EVENT_LOOP_WARN) || !defined(EVENT_LOOP_ERR)
-        #include <stdio.h> /* fprintf() */
-    #endif
-
-    #if !defined(EVENT_LOOP_DEBUG)
-        #define EVENT_LOOP_DEBUG(fmt, ...) \
-            fprintf(stderr, "event loop: " fmt "\n", ##__VA_ARGS__)
-    #endif
-    #if !defined(EVENT_LOOP_WARN)
-        #define EVENT_LOOP_WARN(fmt, ...) \
-            fprintf(stderr, "event loop: WARN: " fmt "\n", ##__VA_ARGS__)
-    #endif
-    #if !defined(EVENT_LOOP_ERR)
-        #define EVENT_LOOP_ERR(fmt, ...) \
-            fprintf(stderr, "event loop: ERR: " fmt "\n", ##__VA_ARGS__)
-    #endif
-#else
-    #define EVENT_LOOP_DEBUG(fmt, ...) /* no-op */
-    #define EVENT_LOOP_WARN(fmt, ...) /* no-op */
-    #define EVENT_LOOP_ERR(fmt, ...) /* no-op */
+/*
+ * doing this to avoid compiler warning:
+ * passing no argument for the '...' parameter of a variadic macro is a C23 extension
+ */
+#if !defined(EVENT_LOOP_DEBUG) || !defined(EVENT_LOOP_WARN) || !defined(EVENT_LOOP_ERR)
+    #include <stdio.h> /* printf() */
+#endif
+#if !defined(EVENT_LOOP_LOG_DEBUG)
+    #define EVENT_LOOP_LOG_DEBUG(fmt, ...) if (0) printf(fmt, ##__VA_ARGS__)
+#endif
+#if !defined(EVENT_LOOP_LOG_WARN)
+    #define EVENT_LOOP_LOG_WARN(fmt, ...) if (0) printf(fmt, ##__VA_ARGS__)
+#endif
+#if !defined(EVENT_LOOP_LOG_ERR)
+    #define EVENT_LOOP_LOG_ERR(fmt, ...) if (0) printf(fmt, ##__VA_ARGS__)
 #endif
 
 #include <sys/epoll.h>
@@ -243,13 +234,13 @@ static bool fd_is_valid(int fd) {
 }
 
 struct event_loop *event_loop_create(void) {
-    EVENT_LOOP_DEBUG("create");
+    EVENT_LOOP_LOG_DEBUG("create");
     int save_errno = 0;
 
     struct event_loop *loop = EVENT_LOOP_CALLOC(1, sizeof(*loop));
     if (loop == NULL) {
         save_errno = errno;
-        EVENT_LOOP_ERR("failed to allocate memory for event loop: %s", strerror(errno));
+        EVENT_LOOP_LOG_ERR("failed to allocate memory for event loop: %s", strerror(errno));
         goto err;
     }
 
@@ -259,7 +250,7 @@ struct event_loop *event_loop_create(void) {
     loop->epoll_fd = epoll_create1(EPOLL_CLOEXEC);
     if (loop->epoll_fd < 0) {
         save_errno = errno;
-        EVENT_LOOP_ERR("failed to create epoll: %s", strerror(errno));
+        EVENT_LOOP_LOG_ERR("failed to create epoll: %s", strerror(errno));
         goto err;
     }
 
@@ -272,7 +263,7 @@ err:
 }
 
 void event_loop_cleanup(struct event_loop *loop) {
-    EVENT_LOOP_DEBUG("cleanup");
+    EVENT_LOOP_LOG_DEBUG("cleanup");
 
     struct event_loop_item *item, *item_tmp;
     EVENT_LOOP_LL_FOR_EACH_SAFE(item, item_tmp, &loop->items, link) {
@@ -293,12 +284,12 @@ struct event_loop_item *event_loop_add_callback(struct event_loop *loop, int fd,
     int save_errno = 0;
 
     if (fd >= 0) {
-        EVENT_LOOP_DEBUG("adding fd %d to event loop", fd);
+        EVENT_LOOP_LOG_DEBUG("adding fd %d to event loop", fd);
 
         new_item = EVENT_LOOP_CALLOC(1, sizeof(*new_item));
         if (new_item == NULL) {
             save_errno = errno;
-            EVENT_LOOP_ERR("failed to allocate memory for callback: %s", strerror(errno));
+            EVENT_LOOP_LOG_ERR("failed to allocate memory for callback: %s", strerror(errno));
             goto err;
         }
         new_item->loop = loop;
@@ -312,19 +303,19 @@ struct event_loop_item *event_loop_add_callback(struct event_loop *loop, int fd,
         epoll_event.data.ptr = new_item;
         if (epoll_ctl(loop->epoll_fd, EPOLL_CTL_ADD, fd, &epoll_event) < 0) {
             save_errno = errno;
-            EVENT_LOOP_ERR("failed to add fd %d to epoll: %s", fd, strerror(errno));
+            EVENT_LOOP_LOG_ERR("failed to add fd %d to epoll: %s", fd, strerror(errno));
             goto err;
         }
 
         event_loop_ll_insert(&loop->items, &new_item->link);
     } else {
         int priority = -fd;
-        EVENT_LOOP_DEBUG("adding unconditional callback with prio %d to event loop", priority);
+        EVENT_LOOP_LOG_DEBUG("adding unconditional callback with prio %d to event loop", priority);
 
         new_item = EVENT_LOOP_CALLOC(1, sizeof(*new_item));
         if (new_item == NULL) {
             save_errno = errno;
-            EVENT_LOOP_ERR("failed to allocate memory for callback: %s", strerror(errno));
+            EVENT_LOOP_LOG_ERR("failed to allocate memory for callback: %s", strerror(errno));
             goto err;
         }
         new_item->loop = loop;
@@ -365,20 +356,21 @@ err:
 
 void event_loop_remove_callback(struct event_loop_item *item) {
     if (item->fd >= 0) {
-        EVENT_LOOP_DEBUG("removing callback for fd %d from event loop", item->fd);
+        EVENT_LOOP_LOG_DEBUG("removing callback for fd %d from event loop", item->fd);
 
         if (fd_is_valid(item->fd)) {
             if (epoll_ctl(item->loop->epoll_fd, EPOLL_CTL_DEL, item->fd, NULL) < 0) {
                 int ret = -errno;
-                EVENT_LOOP_ERR("failed to remove fd %d from epoll: %s", item->fd, strerror(errno));
+                EVENT_LOOP_LOG_ERR("failed to remove fd %d from epoll: %s", item->fd,
+                                   strerror(errno));
                 event_loop_quit(item->loop, ret);
             }
             close(item->fd);
         } else {
-            EVENT_LOOP_WARN("fd %d is not valid, was it closed somewhere else?", item->fd);
+            EVENT_LOOP_LOG_WARN("fd %d is not valid, was it closed somewhere else?", item->fd);
         }
     } else {
-        EVENT_LOOP_DEBUG("removing unconditional callback with prio %d from event loop",
+        EVENT_LOOP_LOG_DEBUG("removing unconditional callback with prio %d from event loop",
                          item->priority);
     }
 
@@ -400,7 +392,7 @@ void *event_loop_item_get_data(struct event_loop_item *item) {
 }
 
 int event_loop_run(struct event_loop *loop) {
-    EVENT_LOOP_DEBUG("run");
+    EVENT_LOOP_LOG_DEBUG("run");
 
     int ret = 0;
     int number_fds = -1;
@@ -414,20 +406,20 @@ int event_loop_run(struct event_loop *loop) {
 
         if (number_fds == -1) {
             ret = errno;
-            EVENT_LOOP_ERR("epoll_wait error (%s)", strerror(errno));
+            EVENT_LOOP_LOG_ERR("epoll_wait error (%s)", strerror(errno));
             loop->retcode = -ret;
             goto out;
         }
 
-        EVENT_LOOP_DEBUG("received events on %d fds", number_fds);
+        EVENT_LOOP_LOG_DEBUG("received events on %d fds", number_fds);
 
         for (int n = 0; n < number_fds; n++) {
             struct event_loop_item *item = events[n].data.ptr;
-            EVENT_LOOP_DEBUG("running callback for fd %d", item->fd);
+            EVENT_LOOP_LOG_DEBUG("running callback for fd %d", item->fd);
 
             ret = item->callback(item, events[n].events);
             if (ret < 0) {
-                EVENT_LOOP_ERR("callback returned %d, quitting", ret);
+                EVENT_LOOP_LOG_ERR("callback returned %d, quitting", ret);
                 loop->retcode = ret;
                 goto out;
             }
@@ -435,10 +427,10 @@ int event_loop_run(struct event_loop *loop) {
 
         struct event_loop_item *item;
         EVENT_LOOP_LL_FOR_EACH(item, &loop->unconditional_items, link) {
-            EVENT_LOOP_DEBUG("running unconditional callback with prio %d", item->priority);
+            EVENT_LOOP_LOG_DEBUG("running unconditional callback with prio %d", item->priority);
             ret = item->callback(item, 0);
             if (ret < 0) {
-                EVENT_LOOP_ERR("callback returned %d, quitting", ret);
+                EVENT_LOOP_LOG_ERR("callback returned %d, quitting", ret);
                 loop->retcode = ret;
                 goto out;
             }
@@ -450,7 +442,7 @@ out:
 }
 
 void event_loop_quit(struct event_loop *loop, int retcode) {
-    EVENT_LOOP_DEBUG("quit");
+    EVENT_LOOP_LOG_DEBUG("quit");
 
     loop->should_quit = true;
     loop->retcode = retcode;

@@ -17,7 +17,6 @@ Usage example that monitors fd 0 (stdin) and echoes read data to stdout:
 #include <errno.h>
 
 #define EVENT_LOOP_IMPLEMENTATION
-#define EVENT_LOOP_ENABLE_LOGGING
 #include "event_loop.h"
 
 static int stdin_callback(struct event_loop_item *loop_item, uint32_t events) {
