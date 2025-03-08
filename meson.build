@@ -1,6 +1,6 @@
 project('event_loop.h','c',
   license: 'MIT',
-  version: '0.1.0',
+  version: '0.1.1',
   default_options: ['warning_level=3'])
 
 # needed for ##__VA_ARGS__
