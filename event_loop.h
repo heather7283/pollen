@@ -358,13 +358,12 @@ err:
 
 void event_loop_remove_item(struct event_loop_item *item) {
     if (item->fd >= 0) {
-        EVENT_LOOP_DEBUG("removing fd %d from event loop", item->fd);
+        EVENT_LOOP_DEBUG("removing callback for fd %d from event loop", item->fd);
 
         if (fd_is_valid(item->fd)) {
             if (epoll_ctl(item->loop->epoll_fd, EPOLL_CTL_DEL, item->fd, NULL) < 0) {
                 int ret = -errno;
-                EVENT_LOOP_ERR("failed to remove fd %d from epoll (%s)",
-                    item->fd, strerror(errno));
+                EVENT_LOOP_ERR("failed to remove fd %d from epoll: %s", item->fd, strerror(errno));
                 event_loop_quit(item->loop, ret);
             }
             close(item->fd);
@@ -373,7 +372,7 @@ void event_loop_remove_item(struct event_loop_item *item) {
         }
     } else {
         EVENT_LOOP_DEBUG("removing unconditional callback with prio %d from event loop",
-              item->priority);
+                         item->priority);
     }
 
     event_loop_ll_remove(&item->link);
@@ -413,11 +412,11 @@ int event_loop_run(struct event_loop *loop) {
 
         for (int n = 0; n < number_fds; n++) {
             struct event_loop_item *item = events[n].data.ptr;
-            EVENT_LOOP_DEBUG("processing item with fd %d", item->fd);
+            EVENT_LOOP_DEBUG("running callback for fd %d", item->fd);
 
             ret = item->callback(item->data, item);
             if (ret < 0) {
-                EVENT_LOOP_ERR("callback returned negative, quitting");
+                EVENT_LOOP_ERR("callback returned %d, quitting", ret);
                 loop->retcode = ret;
                 goto out;
             }
@@ -428,7 +427,7 @@ int event_loop_run(struct event_loop *loop) {
             EVENT_LOOP_DEBUG("running unconditional callback with prio %d", item->priority);
             ret = item->callback(item->data, item);
             if (ret < 0) {
-                EVENT_LOOP_ERR("callback returned negative, quitting");
+                EVENT_LOOP_ERR("callback returned %d, quitting", ret);
                 loop->retcode = ret;
                 goto out;
             }
