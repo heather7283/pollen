@@ -7,10 +7,10 @@
 //#define EVENT_LOOP_IMPLEMENTATION
 #include "event_loop.h"
 
-int eventfd_callback(void *data, struct event_loop_item *loop_item) {
+int eventfd_callback(struct event_loop_item *loop_item, uint32_t events) {
     printf("eventfd_callback: fired\n");
 
-    int efd = *(int *)data;
+    int efd = *(int *)event_loop_item_get_data(loop_item);
 
     uint64_t n;
     while (read(efd, &n, sizeof(n)) > 0) {
@@ -23,7 +23,7 @@ int eventfd_callback(void *data, struct event_loop_item *loop_item) {
     return 0;
 }
 
-int unconditional_callback(void *data, struct event_loop_item *loop_item) {
+int unconditional_callback(struct event_loop_item *loop_item, uint32_t events) {
     static int foo = 0;
 
     printf("unconditional_callback: fired, foo = %d\n", foo);
@@ -35,7 +35,7 @@ int unconditional_callback(void *data, struct event_loop_item *loop_item) {
     return 0;
 }
 
-int unconditional_callback_low_prio(void *data, struct event_loop_item *loop_item) {
+int unconditional_callback_low_prio(struct event_loop_item *loop_item, uint32_t events) {
     printf("unconditional_callback_low_prio: fired\n");
 
     return 0;
@@ -54,9 +54,9 @@ int main(void) {
     n = 1;
     write(efd, &n, sizeof(n));
 
-    assert(event_loop_add_callback(loop, efd, eventfd_callback, &efd));
-    assert(event_loop_add_callback(loop, -100, unconditional_callback, NULL));
-    assert(event_loop_add_callback(loop, -1, unconditional_callback_low_prio, NULL));
+    assert(event_loop_add_callback(loop, efd, EPOLLIN, eventfd_callback, &efd));
+    assert(event_loop_add_callback(loop, -100, EPOLLIN, unconditional_callback, NULL));
+    assert(event_loop_add_callback(loop, -1, EPOLLIN, unconditional_callback_low_prio, NULL));
     assert(event_loop_run(loop) == 0);
 
     event_loop_cleanup(loop);

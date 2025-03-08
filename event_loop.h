@@ -81,8 +81,10 @@
     #define EVENT_LOOP_ERR(fmt, ...) /* no-op */
 #endif
 
+#include <stdint.h>
+
 struct event_loop_item;
-typedef int (*event_loop_callback_t)(void *data, struct event_loop_item *loop_item);
+typedef int (*event_loop_callback_t)(struct event_loop_item *loop_item, uint32_t events);
 
 /* Creates a new event_loop instance. Returns NULL and sets errno on failure. */
 struct event_loop *event_loop_create(void);
@@ -93,15 +95,15 @@ void event_loop_cleanup(struct event_loop *loop);
  * Add new callback to event loop. Returns NULL and sets errno on failure.
  *
  * If fd >= 0, fd is added to epoll interest list.
- * Callback function will be called when fd becomes available for reading.
+ * Argument events directly corresponts to epoll_event.events field (see man epoll_event).
  *
  * If fd < 0, callback will run unconditionally on every event loop iteration,
  * after all regular callbacks were dispatched.
- * In this case, negated value of fd is treated as priority.
+ * In this case, negated value of fd is treated as priority, and events argument is ignored.
  * Callbacks with higher priority will run before callbacks with lower priority.
  * If two callbacks have equal priority, the order is undefined.
  */
-struct event_loop_item *event_loop_add_callback(struct event_loop *loop, int fd,
+struct event_loop_item *event_loop_add_callback(struct event_loop *loop, int fd, uint32_t events,
                                                 event_loop_callback_t callback, void *data);
 /*
  * Remove a callback from event loop.
@@ -117,6 +119,8 @@ struct event_loop *event_loop_item_get_loop(struct event_loop_item *item);
  * If item refers to an unconditional callback, -1 is returned.
  */
 int event_loop_item_get_fd(struct event_loop_item *item);
+/* Get pointer to user data saved in this event_loop_item. */
+void *event_loop_item_get_data(struct event_loop_item *item);
 
 /*
  * Run the event loop. This function blocks until event loop exits.
@@ -281,7 +285,7 @@ void event_loop_cleanup(struct event_loop *loop) {
     EVENT_LOOP_FREE(loop);
 }
 
-struct event_loop_item *event_loop_add_callback(struct event_loop *loop, int fd,
+struct event_loop_item *event_loop_add_callback(struct event_loop *loop, int fd, uint32_t events,
                                                 event_loop_callback_t callback, void *data) {
     struct event_loop_item *new_item = NULL;
     int save_errno = 0;
@@ -302,7 +306,7 @@ struct event_loop_item *event_loop_add_callback(struct event_loop *loop, int fd,
         new_item->data = data;
 
         struct epoll_event epoll_event;
-        epoll_event.events = EPOLLIN;
+        epoll_event.events = events;
         epoll_event.data.ptr = new_item;
         if (epoll_ctl(loop->epoll_fd, EPOLL_CTL_ADD, fd, &epoll_event) < 0) {
             save_errno = errno;
@@ -389,6 +393,10 @@ int event_loop_item_get_fd(struct event_loop_item *item) {
     return item->fd;
 }
 
+void *event_loop_item_get_data(struct event_loop_item *item) {
+    return item->data;
+}
+
 int event_loop_run(struct event_loop *loop) {
     EVENT_LOOP_DEBUG("run");
 
@@ -415,7 +423,7 @@ int event_loop_run(struct event_loop *loop) {
             struct event_loop_item *item = events[n].data.ptr;
             EVENT_LOOP_DEBUG("running callback for fd %d", item->fd);
 
-            ret = item->callback(item->data, item);
+            ret = item->callback(item, events[n].events);
             if (ret < 0) {
                 EVENT_LOOP_ERR("callback returned %d, quitting", ret);
                 loop->retcode = ret;
@@ -426,7 +434,7 @@ int event_loop_run(struct event_loop *loop) {
         struct event_loop_item *item;
         EVENT_LOOP_LL_FOR_EACH(item, &loop->unconditional_items, link) {
             EVENT_LOOP_DEBUG("running unconditional callback with prio %d", item->priority);
-            ret = item->callback(item->data, item);
+            ret = item->callback(item, 0);
             if (ret < 0) {
                 EVENT_LOOP_ERR("callback returned %d, quitting", ret);
                 loop->retcode = ret;
