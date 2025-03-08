@@ -107,7 +107,7 @@ struct event_loop_item *event_loop_add_callback(struct event_loop *loop, int fd,
  * If a callback has fd associated with it, this function will attempt to close it.
  * If fd was already closed, a warning will be printed.
  */
-void event_loop_remove_item(struct event_loop_item *item);
+void event_loop_remove_callback(struct event_loop_item *item);
 
 /* Get event_loop instance associated with this event_loop_item. */
 struct event_loop *event_loop_item_get_loop(struct event_loop_item *item);
@@ -269,10 +269,10 @@ void event_loop_cleanup(struct event_loop *loop) {
 
     struct event_loop_item *item, *item_tmp;
     EVENT_LOOP_LL_FOR_EACH_SAFE(item, item_tmp, &loop->items, link) {
-        event_loop_remove_item(item);
+        event_loop_remove_callback(item);
     }
     EVENT_LOOP_LL_FOR_EACH_SAFE(item, item_tmp, &loop->unconditional_items, link) {
-        event_loop_remove_item(item);
+        event_loop_remove_callback(item);
     }
 
     close(loop->epoll_fd);
@@ -356,7 +356,7 @@ err:
     return NULL;
 }
 
-void event_loop_remove_item(struct event_loop_item *item) {
+void event_loop_remove_callback(struct event_loop_item *item) {
     if (item->fd >= 0) {
         EVENT_LOOP_DEBUG("removing callback for fd %d from event loop", item->fd);
 
