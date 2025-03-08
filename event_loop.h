@@ -80,6 +80,7 @@
     #define EVENT_LOOP_ERR(fmt, ...) /* no-op */
 #endif
 
+#include <sys/epoll.h>
 #include <stdint.h>
 
 struct event_loop_item;
@@ -142,7 +143,6 @@ void event_loop_quit(struct event_loop *loop, int retcode);
  */
 #ifdef EVENT_LOOP_IMPLEMENTATION
 
-#include <sys/epoll.h>
 #include <errno.h>
 #include <unistd.h>
 #include <stddef.h>
