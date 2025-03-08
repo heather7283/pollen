@@ -21,7 +21,7 @@
  * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
  * SOFTWARE.
  *
- * event_loop.h version 0.1.1
+ * event_loop.h version 0.2.0
  * This is a single-header library that provides simple event loop abstraction built on epoll.
  * To use this library, do this in one C file:
  *   #define EVENT_LOOP_IMPLEMENTATION
