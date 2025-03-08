@@ -20,10 +20,11 @@ Usage example that monitors fd 0 (stdin) and echoes read data to stdout:
 #define EVENT_LOOP_ENABLE_LOGGING
 #include "event_loop.h"
 
-static int stdin_callback(void *data, struct event_loop_item *loop_item) {
+static int stdin_callback(struct event_loop_item *loop_item, uint32_t events) {
     printf("stdin_callback: fired\n");
 
-    char *message = data; /* arbitrary pointer passed from somewhere else */
+    /* retrieve and use pointer to user data */
+    char *message = event_loop_item_get_data(loop_item);
     printf("stdin_callback: user data: %s\n", message);
 
     /* get fd associated with this callback */
@@ -65,7 +66,7 @@ int main(void) {
     struct event_loop *loop = event_loop_create();
 
     char *sus = "amogus"; /* you can pass a pointer to callback */
-    event_loop_add_callback(loop, 0 /* stdin */, stdin_callback, sus);
+    event_loop_add_callback(loop, 0 /* stdin */, EPOLLIN, stdin_callback, sus);
 
     ret = event_loop_run(loop); /* this will block until the loop is stopped */
 
