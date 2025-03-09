@@ -77,7 +77,8 @@
 #include <stdint.h>
 
 struct event_loop_item;
-typedef int (*event_loop_callback_t)(struct event_loop_item *loop_item, uint32_t events);
+typedef int (*event_loop_callback_pollable)(struct event_loop_item *loop_item, uint32_t events);
+typedef int (*event_loop_callback_unconditional)(struct event_loop_item *loop_item);
 
 /* Creates a new event_loop instance. Returns NULL and sets errno on failure. */
 struct event_loop *event_loop_create(void);
@@ -85,19 +86,27 @@ struct event_loop *event_loop_create(void);
 void event_loop_cleanup(struct event_loop *loop);
 
 /*
- * Add new callback to event loop. Returns NULL and sets errno on failure.
- *
- * If fd >= 0, fd is added to epoll interest list.
+ * Adds fd to epoll interest list.
  * Argument events directly corresponts to epoll_event.events field (see man epoll_event).
  *
- * If fd < 0, callback will run unconditionally on every event loop iteration,
- * after all regular callbacks were dispatched.
- * In this case, negated value of fd is treated as priority, and events argument is ignored.
+ * Returns NULL and sets errno on failure.
+ */
+struct event_loop_item *event_loop_add_pollable(struct event_loop *loop, int fd, uint32_t events,
+                                                event_loop_callback_pollable callback,
+                                                void *data);
+
+/*
+ * Adds a callback that will run unconditionally on every event loop iteration,
+ * after all other callback types were processed.
  * Callbacks with higher priority will run before callbacks with lower priority.
  * If two callbacks have equal priority, the order is undefined.
+ *
+ * Return NULL and sets errno on failure.
  */
-struct event_loop_item *event_loop_add_callback(struct event_loop *loop, int fd, uint32_t events,
-                                                event_loop_callback_t callback, void *data);
+struct event_loop_item *event_loop_add_unconditional(struct event_loop *loop, int priority,
+                                                     event_loop_callback_unconditional callback,
+                                                     void *data);
+
 /*
  * Remove a callback from event loop.
  * If a callback has fd associated with it, this function will attempt to close it.
@@ -107,13 +116,13 @@ void event_loop_remove_callback(struct event_loop_item *item);
 
 /* Get event_loop instance associated with this event_loop_item. */
 struct event_loop *event_loop_item_get_loop(struct event_loop_item *item);
-/*
- * Get file descriptor associated with this event_loop_item.
- * If item refers to an unconditional callback, -1 is returned.
- */
-int event_loop_item_get_fd(struct event_loop_item *item);
 /* Get pointer to user data saved in this event_loop_item. */
 void *event_loop_item_get_data(struct event_loop_item *item);
+/*
+ * Get file descriptor associated with this event_loop_item.
+ * If item is not a pollable callback, -1 is returned.
+ */
+int event_loop_item_get_fd(struct event_loop_item *item);
 
 /*
  * Run the event loop. This function blocks until event loop exits.
@@ -206,13 +215,27 @@ static inline void event_loop_ll_remove(struct event_loop_ll *elem) {
          var = tmp, \
          tmp = EVENT_LOOP_CONTAINER_OF(var->member.next, tmp, member))
 
+enum event_loop_item_type {
+    POLLABLE,
+    UNCONDITIONAL,
+};
+
 struct event_loop_item {
     struct event_loop *loop;
 
-    int fd;
-    int priority;
+    enum event_loop_item_type type;
+    union {
+        struct {
+            int fd;
+            event_loop_callback_pollable callback;
+        } pollable;
+        struct {
+            int priority;
+            event_loop_callback_unconditional callback;
+        } unconditional;
+    } as;
+
     void *data;
-    event_loop_callback_t callback;
 
     struct event_loop_ll link;
 };
@@ -222,7 +245,7 @@ struct event_loop {
     int retcode;
     int epoll_fd;
 
-    struct event_loop_ll items;
+    struct event_loop_ll pollable_items;
     struct event_loop_ll unconditional_items;
 };
 
@@ -244,7 +267,7 @@ struct event_loop *event_loop_create(void) {
         goto err;
     }
 
-    event_loop_ll_init(&loop->items);
+    event_loop_ll_init(&loop->pollable_items);
     event_loop_ll_init(&loop->unconditional_items);
 
     loop->epoll_fd = epoll_create1(EPOLL_CLOEXEC);
@@ -266,7 +289,7 @@ void event_loop_cleanup(struct event_loop *loop) {
     EVENT_LOOP_LOG_DEBUG("cleanup");
 
     struct event_loop_item *item, *item_tmp;
-    EVENT_LOOP_LL_FOR_EACH_SAFE(item, item_tmp, &loop->items, link) {
+    EVENT_LOOP_LL_FOR_EACH_SAFE(item, item_tmp, &loop->pollable_items, link) {
         event_loop_remove_callback(item);
     }
     EVENT_LOOP_LL_FOR_EACH_SAFE(item, item_tmp, &loop->unconditional_items, link) {
@@ -278,71 +301,84 @@ void event_loop_cleanup(struct event_loop *loop) {
     EVENT_LOOP_FREE(loop);
 }
 
-struct event_loop_item *event_loop_add_callback(struct event_loop *loop, int fd, uint32_t events,
-                                                event_loop_callback_t callback, void *data) {
+struct event_loop_item *event_loop_add_pollable(struct event_loop *loop, int fd, uint32_t events,
+                                                event_loop_callback_pollable callback,
+                                                void *data) {
     struct event_loop_item *new_item = NULL;
     int save_errno = 0;
 
-    if (fd >= 0) {
-        EVENT_LOOP_LOG_DEBUG("adding fd %d to event loop", fd);
+    EVENT_LOOP_LOG_DEBUG("adding pollable callback to event loop, fd %d, events %X", fd, events);
 
-        new_item = EVENT_LOOP_CALLOC(1, sizeof(*new_item));
-        if (new_item == NULL) {
-            save_errno = errno;
-            EVENT_LOOP_LOG_ERR("failed to allocate memory for callback: %s", strerror(errno));
-            goto err;
-        }
-        new_item->loop = loop;
-        new_item->fd = fd;
-        new_item->priority = -1;
-        new_item->callback = callback;
-        new_item->data = data;
+    new_item = EVENT_LOOP_CALLOC(1, sizeof(*new_item));
+    if (new_item == NULL) {
+        save_errno = errno;
+        EVENT_LOOP_LOG_ERR("failed to allocate memory for callback: %s", strerror(errno));
+        goto err;
+    }
+    new_item->loop = loop;
+    new_item->type = POLLABLE;
+    new_item->as.pollable.fd = fd;
+    new_item->as.pollable.callback = callback;
+    new_item->data = data;
 
-        struct epoll_event epoll_event;
-        epoll_event.events = events;
-        epoll_event.data.ptr = new_item;
-        if (epoll_ctl(loop->epoll_fd, EPOLL_CTL_ADD, fd, &epoll_event) < 0) {
-            save_errno = errno;
-            EVENT_LOOP_LOG_ERR("failed to add fd %d to epoll: %s", fd, strerror(errno));
-            goto err;
-        }
+    struct epoll_event epoll_event;
+    epoll_event.events = events;
+    epoll_event.data.ptr = new_item;
+    if (epoll_ctl(loop->epoll_fd, EPOLL_CTL_ADD, fd, &epoll_event) < 0) {
+        save_errno = errno;
+        EVENT_LOOP_LOG_ERR("failed to add fd %d to epoll: %s", fd, strerror(errno));
+        goto err;
+    }
 
-        event_loop_ll_insert(&loop->items, &new_item->link);
+    event_loop_ll_insert(&loop->pollable_items, &new_item->link);
+
+    return new_item;
+
+err:
+    EVENT_LOOP_FREE(new_item);
+    errno = save_errno;
+    return NULL;
+}
+
+struct event_loop_item *event_loop_add_unconditional(struct event_loop *loop, int priority,
+                                                     event_loop_callback_unconditional callback,
+                                                     void *data) {
+    struct event_loop_item *new_item = NULL;
+    int save_errno = 0;
+
+    EVENT_LOOP_LOG_DEBUG("adding unconditional callback with prio %d to event loop", priority);
+
+    new_item = EVENT_LOOP_CALLOC(1, sizeof(*new_item));
+    if (new_item == NULL) {
+        save_errno = errno;
+        EVENT_LOOP_LOG_ERR("failed to allocate memory for callback: %s", strerror(errno));
+        goto err;
+    }
+    new_item->loop = loop;
+    new_item->type = UNCONDITIONAL;
+    new_item->as.unconditional.priority = priority;
+    new_item->as.unconditional.callback = callback;
+    new_item->data = data;
+
+    if (event_loop_ll_is_empty(&loop->unconditional_items)) {
+        event_loop_ll_insert(&loop->unconditional_items, &new_item->link);
     } else {
-        int priority = -fd;
-        EVENT_LOOP_LOG_DEBUG("adding unconditional callback with prio %d to event loop", priority);
-
-        new_item = EVENT_LOOP_CALLOC(1, sizeof(*new_item));
-        if (new_item == NULL) {
-            save_errno = errno;
-            EVENT_LOOP_LOG_ERR("failed to allocate memory for callback: %s", strerror(errno));
-            goto err;
-        }
-        new_item->loop = loop;
-        new_item->fd = -1;
-        new_item->priority = priority;
-        new_item->callback = callback;
-        new_item->data = data;
-
-        if (event_loop_ll_is_empty(&loop->unconditional_items)) {
-            event_loop_ll_insert(&loop->unconditional_items, &new_item->link);
-        } else {
-            struct event_loop_item *elem;
-            EVENT_LOOP_LL_FOR_EACH_REVERSE(elem, &loop->unconditional_items, link) {
-                /*         |6|
-                 * |9|  |8|\/|4|  |2|
-                 * <-----------------
-                 * iterate from the end and find the first item with higher prio
-                 */
-                bool found = false;
-                if (elem->priority > priority) {
-                    found = true;
-                    event_loop_ll_insert(&elem->link, &new_item->link);
-                }
-                if (!found) {
-                    event_loop_ll_insert(&loop->unconditional_items, &new_item->link);
-                }
+        struct event_loop_item *elem;
+        bool found = false;
+        EVENT_LOOP_LL_FOR_EACH_REVERSE(elem, &loop->unconditional_items, link) {
+            /*         |6|
+             * |9|  |8|\/|4|  |2|
+             * <-----------------
+             * iterate from the end and find the first item with higher prio
+             */
+            if (elem->as.unconditional.priority > priority) {
+                found = true;
+                event_loop_ll_insert(&elem->link, &new_item->link);
+                break;
             }
+        }
+        if (!found) {
+            event_loop_ll_insert(&loop->unconditional_items, &new_item->link);
         }
     }
 
@@ -355,23 +391,26 @@ err:
 }
 
 void event_loop_remove_callback(struct event_loop_item *item) {
-    if (item->fd >= 0) {
-        EVENT_LOOP_LOG_DEBUG("removing callback for fd %d from event loop", item->fd);
+    switch (item->type) {
+    case POLLABLE: {
+        int fd = item->as.pollable.fd;
 
-        if (fd_is_valid(item->fd)) {
-            if (epoll_ctl(item->loop->epoll_fd, EPOLL_CTL_DEL, item->fd, NULL) < 0) {
-                int ret = -errno;
-                EVENT_LOOP_LOG_ERR("failed to remove fd %d from epoll: %s", item->fd,
-                                   strerror(errno));
-                event_loop_quit(item->loop, ret);
+        EVENT_LOOP_LOG_DEBUG("removing pollable callback for fd %d from event loop", fd);
+
+        if (fd_is_valid(item->as.pollable.fd)) {
+            if (epoll_ctl(item->loop->epoll_fd, EPOLL_CTL_DEL, fd, NULL) < 0) {
+                EVENT_LOOP_LOG_ERR("failed to remove fd %d from epoll: %s", fd, strerror(errno));
             }
-            close(item->fd);
+            close(fd);
         } else {
-            EVENT_LOOP_LOG_WARN("fd %d is not valid, was it closed somewhere else?", item->fd);
+            EVENT_LOOP_LOG_WARN("fd %d is not valid, was it closed somewhere else?", fd);
         }
-    } else {
+        break;
+    }
+    case UNCONDITIONAL: {
         EVENT_LOOP_LOG_DEBUG("removing unconditional callback with prio %d from event loop",
-                         item->priority);
+                             item->as.unconditional.priority);
+    }
     }
 
     event_loop_ll_remove(&item->link);
@@ -383,12 +422,16 @@ struct event_loop *event_loop_item_get_loop(struct event_loop_item *item) {
     return item->loop;
 }
 
-int event_loop_item_get_fd(struct event_loop_item *item) {
-    return item->fd;
-}
-
 void *event_loop_item_get_data(struct event_loop_item *item) {
     return item->data;
+}
+
+int event_loop_item_get_fd(struct event_loop_item *item) {
+    if (item->type != POLLABLE) {
+        return -1;
+    } else {
+        return item->as.pollable.fd;
+    }
 }
 
 int event_loop_run(struct event_loop *loop) {
@@ -415,9 +458,9 @@ int event_loop_run(struct event_loop *loop) {
 
         for (int n = 0; n < number_fds; n++) {
             struct event_loop_item *item = events[n].data.ptr;
-            EVENT_LOOP_LOG_DEBUG("running callback for fd %d", item->fd);
+            EVENT_LOOP_LOG_DEBUG("running callback for fd %d", item->as.pollable.fd);
 
-            ret = item->callback(item, events[n].events);
+            ret = item->as.pollable.callback(item, events[n].events);
             if (ret < 0) {
                 EVENT_LOOP_LOG_ERR("callback returned %d, quitting", ret);
                 loop->retcode = ret;
@@ -425,10 +468,12 @@ int event_loop_run(struct event_loop *loop) {
             }
         }
 
-        struct event_loop_item *item;
-        EVENT_LOOP_LL_FOR_EACH(item, &loop->unconditional_items, link) {
-            EVENT_LOOP_LOG_DEBUG("running unconditional callback with prio %d", item->priority);
-            ret = item->callback(item, 0);
+        struct event_loop_item *item, *item_tmp;
+        EVENT_LOOP_LL_FOR_EACH_SAFE(item, item_tmp, &loop->unconditional_items, link) {
+            EVENT_LOOP_LOG_DEBUG("running unconditional callback with prio %d",
+                                 item->as.unconditional.priority);
+
+            ret = item->as.unconditional.callback(item);
             if (ret < 0) {
                 EVENT_LOOP_LOG_ERR("callback returned %d, quitting", ret);
                 loop->retcode = ret;
