@@ -74,11 +74,13 @@
 #endif
 
 #include <sys/epoll.h>
+#include <signal.h>
 #include <stdint.h>
 
 struct event_loop_item;
 typedef int (*event_loop_callback_pollable)(struct event_loop_item *loop_item, uint32_t events);
 typedef int (*event_loop_callback_unconditional)(struct event_loop_item *loop_item);
+typedef int (*event_loop_callback_signal)(struct event_loop_item *loop_item, int signal);
 
 /* Creates a new event_loop instance. Returns NULL and sets errno on failure. */
 struct event_loop *event_loop_create(void);
@@ -106,6 +108,15 @@ struct event_loop_item *event_loop_add_pollable(struct event_loop *loop, int fd,
 struct event_loop_item *event_loop_add_unconditional(struct event_loop *loop, int priority,
                                                      event_loop_callback_unconditional callback,
                                                      void *data);
+
+/*
+ * Adds a callback that will run when signal is caught. Uses signalfd under the hood.
+ *
+ * Return NULL and sets errno on failure.
+ */
+struct event_loop_item *event_loop_add_signal(struct event_loop *loop, int signal,
+                                              event_loop_callback_signal callback,
+                                              void *data);
 
 /*
  * Remove a callback from event loop.
@@ -145,6 +156,7 @@ void event_loop_quit(struct event_loop *loop, int retcode);
  */
 #ifdef EVENT_LOOP_IMPLEMENTATION
 
+#include <sys/signalfd.h>
 #include <errno.h>
 #include <unistd.h>
 #include <stddef.h>
@@ -218,6 +230,7 @@ static inline void event_loop_ll_remove(struct event_loop_ll *elem) {
 enum event_loop_item_type {
     POLLABLE,
     UNCONDITIONAL,
+    SIGNAL,
 };
 
 struct event_loop_item {
@@ -233,6 +246,10 @@ struct event_loop_item {
             int priority;
             event_loop_callback_unconditional callback;
         } unconditional;
+        struct {
+            int sig;
+            event_loop_callback_signal callback;
+        } signal;
     } as;
 
     void *data;
@@ -245,8 +262,15 @@ struct event_loop {
     int retcode;
     int epoll_fd;
 
+    /* signal(7) says there are 38 standard signals on linux */
+    struct event_loop_item *signal_callbacks[38];
+    int n_signal_callbacks;
+    int signal_fd;
+    sigset_t sigset;
+
     struct event_loop_ll pollable_items;
     struct event_loop_ll unconditional_items;
+    struct event_loop_ll signal_items;
 };
 
 static bool fd_is_valid(int fd) {
@@ -269,11 +293,29 @@ struct event_loop *event_loop_create(void) {
 
     event_loop_ll_init(&loop->pollable_items);
     event_loop_ll_init(&loop->unconditional_items);
+    event_loop_ll_init(&loop->signal_items);
 
-    loop->epoll_fd = epoll_create1(EPOLL_CLOEXEC);
+    loop->epoll_fd = epoll_create1(0);
     if (loop->epoll_fd < 0) {
         save_errno = errno;
         EVENT_LOOP_LOG_ERR("failed to create epoll: %s", strerror(errno));
+        goto err;
+    }
+
+    /* TODO: don't create signalfd until the first signal callback is added? */
+    sigemptyset(&loop->sigset);
+    loop->signal_fd = signalfd(-1, &loop->sigset, SFD_NONBLOCK);
+    if (loop->signal_fd < 0) {
+        save_errno = errno;
+        EVENT_LOOP_LOG_ERR("failed to create signalfd: %s", strerror(errno));
+        goto err;
+    }
+    struct epoll_event epoll_event;
+    epoll_event.events = EPOLLIN;
+    epoll_event.data.ptr = NULL;
+    if (epoll_ctl(loop->epoll_fd, EPOLL_CTL_ADD, loop->signal_fd, &epoll_event) < 0) {
+        save_errno = errno;
+        EVENT_LOOP_LOG_ERR("failed to add signalfd to epoll: %s", strerror(errno));
         goto err;
     }
 
@@ -295,7 +337,11 @@ void event_loop_cleanup(struct event_loop *loop) {
     EVENT_LOOP_LL_FOR_EACH_SAFE(item, item_tmp, &loop->unconditional_items, link) {
         event_loop_remove_callback(item);
     }
+    EVENT_LOOP_LL_FOR_EACH_SAFE(item, item_tmp, &loop->signal_items, link) {
+        event_loop_remove_callback(item);
+    }
 
+    close(loop->signal_fd);
     close(loop->epoll_fd);
 
     EVENT_LOOP_FREE(loop);
@@ -390,6 +436,100 @@ err:
     return NULL;
 }
 
+struct event_loop_item *event_loop_add_signal(struct event_loop *loop, int signal,
+                                              event_loop_callback_signal callback,
+                                              void *data) {
+    struct event_loop_item *new_item = NULL;
+    int save_errno = 0;
+    bool sigset_saved = false;
+    sigset_t save_global_sigset;
+    sigset_t save_loop_sigset = loop->sigset;
+    bool need_reset_handler = false;
+
+    EVENT_LOOP_LOG_DEBUG("adding signal callback for signal %d", signal);
+
+    if (sigprocmask(SIG_BLOCK /* ignored */, NULL, &save_global_sigset) < 0) {
+        save_errno = errno;
+        EVENT_LOOP_LOG_ERR("failed to save original sigmask: %s", strerror(errno));
+        goto err;
+    }
+    sigset_saved = true;
+
+    new_item = EVENT_LOOP_CALLOC(1, sizeof(*new_item));
+    if (new_item == NULL) {
+        save_errno = errno;
+        EVENT_LOOP_LOG_ERR("failed to allocate memory for callback: %s", strerror(errno));
+        goto err;
+    }
+    new_item->loop = loop;
+    new_item->type = SIGNAL;
+    new_item->as.signal.sig = signal;
+    new_item->as.signal.callback = callback;
+    new_item->data = data;
+
+    /* first, create empty sigset and add our desired signal there. */
+    sigset_t set;
+    sigemptyset(&set);
+    if (sigaddset(&set, signal) < 0) {
+        save_errno = errno;
+        EVENT_LOOP_LOG_ERR("failed to add signal %d to sigset: %s", signal, strerror(errno));
+        goto err;
+    }
+
+    /* block the desired signal globally. */
+    if (sigprocmask(SIG_BLOCK, &set, NULL) < 0) {
+        save_errno = errno;
+        EVENT_LOOP_LOG_ERR("failed to block signal %d: %s", signal, strerror(errno));
+        goto err;
+    }
+
+    /* on success, add the same signal to loop's sigset. */
+    if (sigaddset(&loop->sigset, signal) < 0) {
+        save_errno = errno;
+        EVENT_LOOP_LOG_ERR("failed to add signal %d to loop sigset: %s", signal, strerror(errno));
+        goto err;
+    }
+
+    /* check if handler for this signal already exists */
+    if (loop->signal_callbacks[signal] != NULL) {
+        EVENT_LOOP_LOG_ERR("callback for signal %d already exists", signal);
+        save_errno = EEXIST;
+        goto err;
+    }
+    loop->signal_callbacks[signal] = new_item;
+    loop->n_signal_callbacks += 1;
+    need_reset_handler = true;
+
+    /* change signalfd mask to report newly added signal */
+    int ret = signalfd(loop->signal_fd, &loop->sigset, 0);
+    if (ret < 0) {
+        save_errno = errno;
+        EVENT_LOOP_LOG_ERR("failed to change signalfd sigmask: %s", strerror(errno));
+        goto err;
+    }
+
+    event_loop_ll_insert(&loop->signal_items, &new_item->link);
+
+    return new_item;
+
+err:
+    /* restore original sigmask on failure. important! */
+    if (sigset_saved) {
+        if (sigprocmask(SIG_SETMASK, &save_global_sigset, NULL) < 0) {
+            EVENT_LOOP_LOG_WARN("failed to restore original signal mask! %s", strerror(errno));
+        }
+    }
+    loop->sigset = save_loop_sigset;
+
+    if (need_reset_handler) {
+        loop->signal_callbacks[signal] = NULL;
+    }
+
+    EVENT_LOOP_FREE(new_item);
+    errno = save_errno;
+    return NULL;
+}
+
 void event_loop_remove_callback(struct event_loop_item *item) {
     switch (item->type) {
     case POLLABLE: {
@@ -410,6 +550,25 @@ void event_loop_remove_callback(struct event_loop_item *item) {
     case UNCONDITIONAL: {
         EVENT_LOOP_LOG_DEBUG("removing unconditional callback with prio %d from event loop",
                              item->as.unconditional.priority);
+        break;
+    }
+    case SIGNAL: {
+        int signal = item->as.signal.sig;
+        struct event_loop *loop = item->loop;
+        sigset_t *set = &loop->sigset;
+
+        EVENT_LOOP_LOG_DEBUG("removing signal callback for signal %d from event loop", signal);
+        sigdelset(set, signal);
+
+        int ret = signalfd(loop->signal_fd, set, 0);
+        if (ret < 0) {
+            EVENT_LOOP_LOG_WARN("failed to remove signal %d from signalfd: %s (THIS IS VERY BAD)",
+                                signal, strerror(errno));
+        }
+
+        loop->signal_callbacks[signal] = NULL;
+        loop->n_signal_callbacks -= 1;
+        break;
     }
     }
 
@@ -432,6 +591,40 @@ int event_loop_item_get_fd(struct event_loop_item *item) {
     } else {
         return item->as.pollable.fd;
     }
+}
+
+int event_loop_handle_signals(struct event_loop *loop) {
+    /* TODO: figure out why does this always only read only one sininfo */
+    struct signalfd_siginfo siginfo;
+    int ret;
+    while ((ret = read(loop->signal_fd, &siginfo, sizeof(siginfo))) == sizeof(siginfo)) {
+        int signal = siginfo.ssi_signo;
+        EVENT_LOOP_LOG_DEBUG("received signal %d via signalfd", signal);
+
+        struct event_loop_item *signal_callback = loop->signal_callbacks[signal];
+        if (signal_callback != NULL) {
+            return signal_callback->as.signal.callback(signal_callback, signal);
+        } else {
+            EVENT_LOOP_LOG_ERR("received signal %d via signalfd has no callbacks installed",
+                               signal);
+            return -1;
+        }
+    }
+
+    if (ret >= 0) {
+        EVENT_LOOP_LOG_ERR("read incorrect amount of bytes from signalfd");
+        return -1;
+    } else /* ret < 0 */ {
+        if (errno == EAGAIN || errno == EWOULDBLOCK) {
+            /* no more signalds to handle. exit. */
+            EVENT_LOOP_LOG_DEBUG("no more signalds to handle");
+            return 0;
+        } else {
+            EVENT_LOOP_LOG_ERR("failed to read siginfo from signalfd: %s", strerror(errno));
+            return -1;
+        }
+    }
+
 }
 
 int event_loop_run(struct event_loop *loop) {
@@ -458,16 +651,27 @@ int event_loop_run(struct event_loop *loop) {
 
         for (int n = 0; n < number_fds; n++) {
             struct event_loop_item *item = events[n].data.ptr;
-            EVENT_LOOP_LOG_DEBUG("running callback for fd %d", item->as.pollable.fd);
+            if (item == NULL) {
+                /* this event is from signal fd */
+                ret = event_loop_handle_signals(loop);
+                if (ret < 0) {
+                    EVENT_LOOP_LOG_ERR("signals handler returned %d, quitting", ret);
+                    loop->retcode = ret;
+                    goto out;
+                }
+            } else {
+                EVENT_LOOP_LOG_DEBUG("running callback for fd %d", item->as.pollable.fd);
 
-            ret = item->as.pollable.callback(item, events[n].events);
-            if (ret < 0) {
-                EVENT_LOOP_LOG_ERR("callback returned %d, quitting", ret);
-                loop->retcode = ret;
-                goto out;
+                ret = item->as.pollable.callback(item, events[n].events);
+                if (ret < 0) {
+                    EVENT_LOOP_LOG_ERR("callback returned %d, quitting", ret);
+                    loop->retcode = ret;
+                    goto out;
+                }
             }
         }
 
+        /* process unconditional callbacks */
         struct event_loop_item *item, *item_tmp;
         EVENT_LOOP_LL_FOR_EACH_SAFE(item, item_tmp, &loop->unconditional_items, link) {
             EVENT_LOOP_LOG_DEBUG("running unconditional callback with prio %d",

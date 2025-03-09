@@ -30,7 +30,8 @@ int unconditional_callback(struct event_loop_item *loop_item) {
     printf("unconditional_callback: fired, foo = %d\n", foo);
 
     if (foo++ == 5) {
-        event_loop_quit(event_loop_item_get_loop(loop_item), 0);
+        raise(SIGUSR1);
+        raise(SIGUSR2);
     }
 
     return 0;
@@ -54,6 +55,17 @@ int unconditional_callback_super_low_prio(struct event_loop_item *loop_item) {
     return 0;
 }
 
+int signals_callback(struct event_loop_item *loop_item, int signal) {
+    printf("signals_callback: fired, message %s, signal %d\n",
+           (char *)event_loop_item_get_data(loop_item), signal);
+
+    if (signal == SIGUSR2) {
+        event_loop_quit(event_loop_item_get_loop(loop_item), 0);
+    }
+
+    return 0;
+}
+
 int main(void) {
     int efd;
     efd = eventfd(0, EFD_NONBLOCK);
@@ -69,8 +81,10 @@ int main(void) {
 
     assert(event_loop_add_pollable(loop, efd, EPOLLIN, eventfd_callback, &efd));
     assert(event_loop_add_unconditional(loop, -100, unconditional_callback_super_low_prio, "bwaa"));
-    assert(event_loop_add_unconditional(loop, 100, unconditional_callback, NULL));
-    assert(event_loop_add_unconditional(loop, 1, unconditional_callback_low_prio, "AMOGUS"));
+    assert(event_loop_add_unconditional(loop, 228, unconditional_callback, NULL));
+    assert(event_loop_add_unconditional(loop, 1, unconditional_callback_low_prio, "bipki"));
+    assert(event_loop_add_signal(loop, SIGUSR1, signals_callback, "AMOGUS"));
+    assert(event_loop_add_signal(loop, SIGUSR2, signals_callback, "SUGOMA"));
     assert(event_loop_run(loop) == 0);
 
     event_loop_cleanup(loop);
