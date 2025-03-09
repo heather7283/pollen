@@ -555,16 +555,23 @@ void event_loop_remove_callback(struct event_loop_item *item) {
     case SIGNAL: {
         int signal = item->as.signal.sig;
         struct event_loop *loop = item->loop;
-        sigset_t *set = &loop->sigset;
 
         EVENT_LOOP_LOG_DEBUG("removing signal callback for signal %d from event loop", signal);
-        sigdelset(set, signal);
 
-        int ret = signalfd(loop->signal_fd, set, 0);
+        sigdelset(&loop->sigset, signal);
+        int ret = signalfd(loop->signal_fd, &loop->sigset, 0);
         if (ret < 0) {
             EVENT_LOOP_LOG_WARN("failed to remove signal %d from signalfd: %s (THIS IS VERY BAD)",
                                 signal, strerror(errno));
         }
+
+        sigset_t set;
+        sigemptyset(&set);
+        sigaddset(&set, signal);
+        if (sigprocmask(SIG_UNBLOCK, &set, NULL) < 0) {
+            EVENT_LOOP_LOG_WARN("failed to unblock signal %d: %s (program might misbehave)",
+                                signal, strerror(errno));
+        };
 
         loop->signal_callbacks[signal] = NULL;
         loop->n_signal_callbacks -= 1;
