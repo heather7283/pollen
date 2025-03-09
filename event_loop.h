@@ -280,6 +280,43 @@ static bool fd_is_valid(int fd) {
     return true;
 }
 
+/* this function itself is a callback that will get called on signalfd events */
+int event_loop_signal_handler(struct event_loop_item *item, uint32_t events) {
+    struct event_loop *loop = item->loop;
+
+    /* TODO: figure out why does this always only read only one sininfo */
+    int ret;
+    struct signalfd_siginfo siginfo;
+    while ((ret = read(loop->signal_fd, &siginfo, sizeof(siginfo))) == sizeof(siginfo)) {
+        int signal = siginfo.ssi_signo;
+        EVENT_LOOP_LOG_DEBUG("received signal %d via signalfd", signal);
+
+        struct event_loop_item *signal_callback = loop->signal_callbacks[signal];
+        if (signal_callback != NULL) {
+            return signal_callback->as.signal.callback(signal_callback, signal);
+        } else {
+            EVENT_LOOP_LOG_ERR("received signal %d via signalfd has no callbacks installed",
+                               signal);
+            return -1;
+        }
+    }
+
+    if (ret >= 0) {
+        EVENT_LOOP_LOG_ERR("read incorrect amount of bytes from signalfd");
+        return -1;
+    } else /* ret < 0 */ {
+        if (errno == EAGAIN || errno == EWOULDBLOCK) {
+            /* no more signalds to handle. exit. */
+            EVENT_LOOP_LOG_DEBUG("no more signalds to handle");
+            return 0;
+        } else {
+            EVENT_LOOP_LOG_ERR("failed to read siginfo from signalfd: %s", strerror(errno));
+            return -1;
+        }
+    }
+
+}
+
 struct event_loop *event_loop_create(void) {
     EVENT_LOOP_LOG_DEBUG("create");
     int save_errno = 0;
@@ -310,12 +347,11 @@ struct event_loop *event_loop_create(void) {
         EVENT_LOOP_LOG_ERR("failed to create signalfd: %s", strerror(errno));
         goto err;
     }
-    struct epoll_event epoll_event;
-    epoll_event.events = EPOLLIN;
-    epoll_event.data.ptr = NULL;
-    if (epoll_ctl(loop->epoll_fd, EPOLL_CTL_ADD, loop->signal_fd, &epoll_event) < 0) {
+    if (event_loop_add_pollable(loop, loop->signal_fd, EPOLLIN,
+                                event_loop_signal_handler, NULL) == NULL) {
+        /* bruh moment */
         save_errno = errno;
-        EVENT_LOOP_LOG_ERR("failed to add signalfd to epoll: %s", strerror(errno));
+        EVENT_LOOP_LOG_ERR("failed to add signal handler callback: %s", strerror(errno));
         goto err;
     }
 
@@ -331,13 +367,14 @@ void event_loop_cleanup(struct event_loop *loop) {
     EVENT_LOOP_LOG_DEBUG("cleanup");
 
     struct event_loop_item *item, *item_tmp;
-    EVENT_LOOP_LL_FOR_EACH_SAFE(item, item_tmp, &loop->pollable_items, link) {
-        event_loop_remove_callback(item);
-    }
     EVENT_LOOP_LL_FOR_EACH_SAFE(item, item_tmp, &loop->unconditional_items, link) {
         event_loop_remove_callback(item);
     }
+    /* make sure signal are deleted before pollable bc signal handler is itself pollable */
     EVENT_LOOP_LL_FOR_EACH_SAFE(item, item_tmp, &loop->signal_items, link) {
+        event_loop_remove_callback(item);
+    }
+    EVENT_LOOP_LL_FOR_EACH_SAFE(item, item_tmp, &loop->pollable_items, link) {
         event_loop_remove_callback(item);
     }
 
@@ -600,40 +637,6 @@ int event_loop_item_get_fd(struct event_loop_item *item) {
     }
 }
 
-int event_loop_handle_signals(struct event_loop *loop) {
-    /* TODO: figure out why does this always only read only one sininfo */
-    struct signalfd_siginfo siginfo;
-    int ret;
-    while ((ret = read(loop->signal_fd, &siginfo, sizeof(siginfo))) == sizeof(siginfo)) {
-        int signal = siginfo.ssi_signo;
-        EVENT_LOOP_LOG_DEBUG("received signal %d via signalfd", signal);
-
-        struct event_loop_item *signal_callback = loop->signal_callbacks[signal];
-        if (signal_callback != NULL) {
-            return signal_callback->as.signal.callback(signal_callback, signal);
-        } else {
-            EVENT_LOOP_LOG_ERR("received signal %d via signalfd has no callbacks installed",
-                               signal);
-            return -1;
-        }
-    }
-
-    if (ret >= 0) {
-        EVENT_LOOP_LOG_ERR("read incorrect amount of bytes from signalfd");
-        return -1;
-    } else /* ret < 0 */ {
-        if (errno == EAGAIN || errno == EWOULDBLOCK) {
-            /* no more signalds to handle. exit. */
-            EVENT_LOOP_LOG_DEBUG("no more signalds to handle");
-            return 0;
-        } else {
-            EVENT_LOOP_LOG_ERR("failed to read siginfo from signalfd: %s", strerror(errno));
-            return -1;
-        }
-    }
-
-}
-
 int event_loop_run(struct event_loop *loop) {
     EVENT_LOOP_LOG_DEBUG("run");
 
@@ -658,23 +661,14 @@ int event_loop_run(struct event_loop *loop) {
 
         for (int n = 0; n < number_fds; n++) {
             struct event_loop_item *item = events[n].data.ptr;
-            if (item == NULL) {
-                /* this event is from signal fd */
-                ret = event_loop_handle_signals(loop);
-                if (ret < 0) {
-                    EVENT_LOOP_LOG_ERR("signals handler returned %d, quitting", ret);
-                    loop->retcode = ret;
-                    goto out;
-                }
-            } else {
-                EVENT_LOOP_LOG_DEBUG("running callback for fd %d", item->as.pollable.fd);
 
-                ret = item->as.pollable.callback(item, events[n].events);
-                if (ret < 0) {
-                    EVENT_LOOP_LOG_ERR("callback returned %d, quitting", ret);
-                    loop->retcode = ret;
-                    goto out;
-                }
+            EVENT_LOOP_LOG_DEBUG("running callback for fd %d", item->as.pollable.fd);
+
+            ret = item->as.pollable.callback(item, events[n].events);
+            if (ret < 0) {
+                EVENT_LOOP_LOG_ERR("callback returned %d, quitting", ret);
+                loop->retcode = ret;
+                goto out;
             }
         }
 
