@@ -85,7 +85,7 @@ typedef int (*event_loop_callback_signal)(struct event_loop_item *loop_item, int
 
 /* Creates a new event_loop instance. Returns NULL and sets errno on failure. */
 struct event_loop *event_loop_create(void);
-/* Frees all resources associated with the loop. Loop is not valid after this function returns. */
+/* Frees all resources associated with the loop. Passing NULL is a harmless no-op. */
 void event_loop_cleanup(struct event_loop *loop);
 
 /*
@@ -361,6 +361,10 @@ err:
 }
 
 void event_loop_cleanup(struct event_loop *loop) {
+    if (loop == NULL) {
+        return;
+    }
+
     EVENT_LOOP_LOG_DEBUG("cleanup");
 
     struct event_loop_item *item, *item_tmp;
