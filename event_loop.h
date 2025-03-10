@@ -277,13 +277,6 @@ struct event_loop {
     struct event_loop_ll signal_items;
 };
 
-static bool fd_is_valid(int fd) {
-    if ((fcntl(fd, F_GETFD) < 0) && (errno == EBADF)) {
-        return false;
-    }
-    return true;
-}
-
 /* this function itself is a callback that will get called on signalfd events */
 int event_loop_signal_handler(struct event_loop_item *item, uint32_t events) {
     struct event_loop *loop = item->loop;
@@ -585,12 +578,11 @@ void event_loop_remove_callback(struct event_loop_item *item) {
         }
 
         if (item->as.pollable.autoclose) {
-            if (fd_is_valid(item->as.pollable.fd)) {
-                EVENT_LOOP_LOG_DEBUG("closing fd %d", fd);
-                close(fd);
-            } else {
-                EVENT_LOOP_LOG_WARN("fd %d is not valid, was it closed somewhere else?", fd);
-            }
+            EVENT_LOOP_LOG_DEBUG("closing fd %d", fd);
+            if (close(fd) < 0) {
+                EVENT_LOOP_LOG_WARN("closing fd %d failed: %s (was it closed somewhere else?)",
+                                    fd, strerror(errno));
+            };
         }
         break;
     }
