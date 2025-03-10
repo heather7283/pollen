@@ -21,7 +21,7 @@
  * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
  * SOFTWARE.
  *
- * event_loop.h version 0.4.1
+ * event_loop.h version 0.5.0
  * last version is available at: https://github.com/heather7283/event_loop.h
  *
  * This is a single-header library that provides simple event loop abstraction built on epoll.
