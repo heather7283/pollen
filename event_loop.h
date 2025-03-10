@@ -281,7 +281,7 @@ struct event_loop {
 int event_loop_signal_handler(struct event_loop_item *item, uint32_t events) {
     struct event_loop *loop = item->loop;
 
-    /* TODO: figure out why does this always only read only one sininfo */
+    /* TODO: figure out why does this always only read only one siginfo */
     int ret;
     struct signalfd_siginfo siginfo;
     while ((ret = read(loop->signal_fd, &siginfo, sizeof(siginfo))) == sizeof(siginfo)) {
