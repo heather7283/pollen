@@ -76,6 +76,7 @@
 #include <sys/epoll.h>
 #include <signal.h>
 #include <stdint.h>
+#include <stdbool.h>
 
 struct event_loop_item;
 typedef int (*event_loop_callback_pollable)(struct event_loop_item *loop_item, uint32_t events);
@@ -90,10 +91,12 @@ void event_loop_cleanup(struct event_loop *loop);
 /*
  * Adds fd to epoll interest list.
  * Argument events directly corresponts to epoll_event.events field (see man epoll_event).
+ * If autoclose is true, the fd will be closed when event_loop_remove_callback is called.
  *
  * Returns NULL and sets errno on failure.
  */
-struct event_loop_item *event_loop_add_pollable(struct event_loop *loop, int fd, uint32_t events,
+struct event_loop_item *event_loop_add_pollable(struct event_loop *loop,
+                                                int fd, uint32_t events, bool autoclose,
                                                 event_loop_callback_pollable callback,
                                                 void *data);
 
@@ -241,6 +244,7 @@ struct event_loop_item {
         struct {
             int fd;
             event_loop_callback_pollable callback;
+            bool autoclose;
         } pollable;
         struct {
             int priority;
@@ -347,7 +351,7 @@ struct event_loop *event_loop_create(void) {
         EVENT_LOOP_LOG_ERR("failed to create signalfd: %s", strerror(errno));
         goto err;
     }
-    if (event_loop_add_pollable(loop, loop->signal_fd, EPOLLIN,
+    if (event_loop_add_pollable(loop, loop->signal_fd, EPOLLIN, false,
                                 event_loop_signal_handler, NULL) == NULL) {
         /* bruh moment */
         save_errno = errno;
@@ -384,7 +388,8 @@ void event_loop_cleanup(struct event_loop *loop) {
     EVENT_LOOP_FREE(loop);
 }
 
-struct event_loop_item *event_loop_add_pollable(struct event_loop *loop, int fd, uint32_t events,
+struct event_loop_item *event_loop_add_pollable(struct event_loop *loop,
+                                                int fd, uint32_t events, bool autoclose,
                                                 event_loop_callback_pollable callback,
                                                 void *data) {
     struct event_loop_item *new_item = NULL;
@@ -402,6 +407,7 @@ struct event_loop_item *event_loop_add_pollable(struct event_loop *loop, int fd,
     new_item->type = POLLABLE;
     new_item->as.pollable.fd = fd;
     new_item->as.pollable.callback = callback;
+    new_item->as.pollable.autoclose = autoclose;
     new_item->data = data;
 
     struct epoll_event epoll_event;
@@ -574,13 +580,17 @@ void event_loop_remove_callback(struct event_loop_item *item) {
 
         EVENT_LOOP_LOG_DEBUG("removing pollable callback for fd %d from event loop", fd);
 
-        if (fd_is_valid(item->as.pollable.fd)) {
-            if (epoll_ctl(item->loop->epoll_fd, EPOLL_CTL_DEL, fd, NULL) < 0) {
-                EVENT_LOOP_LOG_ERR("failed to remove fd %d from epoll: %s", fd, strerror(errno));
+        if (epoll_ctl(item->loop->epoll_fd, EPOLL_CTL_DEL, fd, NULL) < 0) {
+            EVENT_LOOP_LOG_WARN("failed to remove fd %d from epoll: %s", fd, strerror(errno));
+        }
+
+        if (item->as.pollable.autoclose) {
+            if (fd_is_valid(item->as.pollable.fd)) {
+                EVENT_LOOP_LOG_DEBUG("closing fd %d", fd);
+                close(fd);
+            } else {
+                EVENT_LOOP_LOG_WARN("fd %d is not valid, was it closed somewhere else?", fd);
             }
-            close(fd);
-        } else {
-            EVENT_LOOP_LOG_WARN("fd %d is not valid, was it closed somewhere else?", fd);
         }
         break;
     }

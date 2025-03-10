@@ -76,7 +76,7 @@ int main(void) {
     char *sus = "amogus"; /* you can pass any arbitrary pointer to callback */
 
     /* this callback will run when stdin (0) becomes available for reading (EPOLLIN) */
-    event_loop_add_pollable(loop, 0 /* stdin */, EPOLLIN, stdin_callback, sus);
+    event_loop_add_pollable(loop, 0 /* stdin */, EPOLLIN, false, stdin_callback, sus);
 
     /*
      * Those callbacks will run on every event loop iteration after all other callback types

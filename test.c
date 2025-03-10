@@ -79,7 +79,7 @@ int main(void) {
     n = 1;
     write(efd, &n, sizeof(n));
 
-    assert(event_loop_add_pollable(loop, efd, EPOLLIN, eventfd_callback, &efd));
+    assert(event_loop_add_pollable(loop, efd, EPOLLIN, true, eventfd_callback, &efd));
     assert(event_loop_add_unconditional(loop, -100, unconditional_callback_super_low_prio, "bwaa"));
     assert(event_loop_add_unconditional(loop, 228, unconditional_callback, NULL));
     assert(event_loop_add_unconditional(loop, 1, unconditional_callback_low_prio, "bipki"));
