@@ -61,7 +61,8 @@
  * doing this to avoid compiler warning:
  * passing no argument for the '...' parameter of a variadic macro is a C23 extension
  */
-#if !defined(EVENT_LOOP_DEBUG) || !defined(EVENT_LOOP_WARN) || !defined(EVENT_LOOP_ERR)
+#if !defined(EVENT_LOOP_DEBUG)  || !defined(EVENT_LOOP_INFO) || \
+    !defined(EVENT_LOOP_WARN) || !defined(EVENT_LOOP_ERR)
     #include <stdio.h> /* printf() */
 #endif
 #if !defined(EVENT_LOOP_LOG_DEBUG)
