@@ -4,6 +4,7 @@
 #include <assert.h>
 
 #define EVENT_LOOP_LOG_DEBUG(fmt, ...) fprintf(stderr, "event loop DEBUG: "fmt"\n", ##__VA_ARGS__)
+#define EVENT_LOOP_LOG_INFO(fmt, ...) fprintf(stderr, "event loop INFO: "fmt"\n", ##__VA_ARGS__)
 #define EVENT_LOOP_LOG_WARN(fmt, ...) fprintf(stderr, "event loop WARN: "fmt"\n", ##__VA_ARGS__)
 #define EVENT_LOOP_LOG_ERR(fmt, ...) fprintf(stderr, "event loop ERROR: "fmt"\n", ##__VA_ARGS__)
 //#define EVENT_LOOP_IMPLEMENTATION
