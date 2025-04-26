@@ -11,7 +11,6 @@ test_sources = [
 ]
 
 add_project_arguments('-Wno-unused-parameter', language: 'c')
-add_project_arguments('-Wno-macro-redefined', language: 'c')
 
 foreach test_source: test_sources
   test_name = test_source.split('.')[0]
