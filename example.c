@@ -1,3 +1,4 @@
+#include <stdarg.h>
 #include <stdio.h>
 #include <unistd.h>
 #include <errno.h>
@@ -5,12 +6,31 @@
 #define POLLEN_IMPLEMENTATION
 #include "pollen.h"
 
-static int stdin_callback(struct pollen_callback *callback, int fd, uint32_t events, void *data) {
-    printf("stdin_callback: fired\n");
+enum color {
+    RED, GREEN, YELLOW, BLUE, PURPLE, CYAN
+};
 
-    /* retrieve and use pointer to user data */
-    char *message = data;
-    printf("stdin_callback: user data: %s\n", message);
+static void print(enum color color, const char *fmt, ...) {
+    switch (color) {
+    case RED: printf("\033[31m"); break;
+    case GREEN: printf("\033[32m"); break;
+    case YELLOW: printf("\033[33m"); break;
+    case BLUE: printf("\033[34m"); break;
+    case PURPLE: printf("\033[35m"); break;
+    case CYAN: printf("\033[36m"); break;
+    }
+
+    va_list args;
+    va_start(args, fmt);
+    vprintf(fmt, args);
+    va_end(args);
+
+    printf("\033[0m");
+    fflush(stdout);
+}
+
+static int stdin_callback(struct pollen_callback *callback, int fd, uint32_t events, void *data) {
+    print(GREEN, "stdin_callback: fired\n");
 
     /* echo read data to stdout */
     static char buf[4096];
@@ -21,7 +41,7 @@ static int stdin_callback(struct pollen_callback *callback, int fd, uint32_t eve
 
     if (ret == 0) {
         /* end of file, quit event loop */
-        printf("stdin_callback: EOF on stdin, quitting event loop\n");
+        print(GREEN, "stdin_callback: EOF on stdin, quitting event loop\n");
         pollen_loop_quit(pollen_callback_get_loop(callback), 0);
         return 0;
     } else { /* ret < 0 */
@@ -31,29 +51,39 @@ static int stdin_callback(struct pollen_callback *callback, int fd, uint32_t eve
         } else {
             /* something went wrong, return error */
             int save_errno = errno;
-            printf("stdin_callback: read() error: %s\n", strerror(errno));
+            print(GREEN, "stdin_callback: read() error: %s\n", strerror(errno));
             return -save_errno;
         }
     }
 }
 
+static int timer_callback(struct pollen_callback *loop_item, void *data) {
+    print(BLUE, "timer_callback: fired\n");
+
+    /* retrieve and use pointer to user data */
+    char *message = data;
+    print(BLUE, "timer_callback: user data: %s\n", message);
+
+    return 0;
+}
+
 static int idle_callback(struct pollen_callback *loop_item, void *data) {
-    printf("idle_callback: fired\n");
-    printf("idle_callback: %s\n", (char *)data);
+    print(YELLOW, "idle_callback: fired\n");
+    print(YELLOW, "idle_callback: %s\n", (char *)data);
 
     return 0;
 }
 
 static int idle_callback_important(struct pollen_callback *loop_item, void *data) {
-    printf("idle_callback_important: fired\n");
-    printf("idle_callback_important: %s\n", (char *)data);
+    print(RED, "idle_callback_important: fired\n");
+    print(RED, "idle_callback_important: %s\n", (char *)data);
 
     return 0;
 }
 
 static int signals_callback(struct pollen_callback *loop_item, int signum, void *data) {
-    printf("signals_callback: fired\n");
-    printf("signals_callback: caught signal %d, exiting main loop\n", signum);
+    print(PURPLE, "signals_callback: fired\n");
+    print(PURPLE, "signals_callback: caught signal %d, exiting main loop\n", signum);
 
     pollen_loop_quit(pollen_callback_get_loop(loop_item), 0);
 
@@ -70,10 +100,13 @@ int main(void) {
 
     struct pollen_loop *loop = pollen_loop_create();
 
+    /* this callback will run when stdin (0) becomes available for reading (EPOLLIN) */
+    pollen_loop_add_fd(loop, 0 /* stdin */, EPOLLIN, false, stdin_callback, NULL);
+
     char *sus = "amogus"; /* you can pass any arbitrary pointer to callback */
 
-    /* this callback will run when stdin (0) becomes available for reading (EPOLLIN) */
-    pollen_loop_add_fd(loop, 0 /* stdin */, EPOLLIN, false, stdin_callback, sus);
+    /* This callback will run every 5 seconds */
+    pollen_loop_add_timer(loop, 5000 /* 3 seconds */, timer_callback, sus);
 
     /*
      * Those callbacks will run on every event loop iteration after all other callback types
