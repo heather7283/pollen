@@ -21,7 +21,7 @@
  * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
  * SOFTWARE.
  *
- * pollen version 1.0.1
+ * pollen version 1.0.2
  * latest version is available at: https://github.com/heather7283/pollen
  *
  * This is a single-header library that provides simple event loop abstraction built on epoll.
@@ -364,7 +364,7 @@ struct pollen_loop *pollen_loop_create(void) {
 
     /* TODO: don't create signalfd until the first signal callback is added? */
     sigemptyset(&loop->sigset);
-    loop->signal_fd = signalfd(-1, &loop->sigset, SFD_NONBLOCK);
+    loop->signal_fd = signalfd(-1, &loop->sigset, SFD_NONBLOCK | SFD_CLOEXEC);
     if (loop->signal_fd < 0) {
         save_errno = errno;
         POLLEN_LOG_ERR("failed to create signalfd: %s", strerror(errno));
