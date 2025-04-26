@@ -7,6 +7,7 @@ project('pollen','c',
 # needed for ##__VA_ARGS__
 add_project_arguments('-Wno-gnu-zero-variadic-macro-arguments', language: 'c')
 
-test_exe = executable('test_exe', 'test.c')
-test('basic', test_exe)
+if get_option('test')
+  subdir('tests')
+endif
 
