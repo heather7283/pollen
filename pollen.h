@@ -21,7 +21,7 @@
  * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
  * SOFTWARE.
  *
- * pollen version 1.0.2
+ * pollen version 1.0.3
  * latest version is available at: https://github.com/heather7283/pollen
  *
  * This is a single-header library that provides simple event loop abstraction built on epoll.
@@ -44,7 +44,7 @@
  *     POLLEN_LOG_ERR(fmt, ...)
  */
 
-//* ONLY UNCOMMENT THIS TO GET SYNTAX HIGHLIGHTING, DONT FORGET TO COMMENT IT BACK
+/* ONLY UNCOMMENT THIS TO GET SYNTAX HIGHLIGHTING, DONT FORGET TO COMMENT IT BACK
 #define POLLEN_IMPLEMENTATION
 //*/
 
@@ -355,7 +355,7 @@ struct pollen_loop *pollen_loop_create(void) {
     pollen_ll_init(&loop->signal_callbacks_list);
     pollen_ll_init(&loop->timer_callbacks_list);
 
-    loop->epoll_fd = epoll_create1(0);
+    loop->epoll_fd = epoll_create1(EPOLL_CLOEXEC);
     if (loop->epoll_fd < 0) {
         save_errno = errno;
         POLLEN_LOG_ERR("failed to create epoll: %s", strerror(errno));
