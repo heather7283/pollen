@@ -44,7 +44,7 @@
  *     POLLEN_LOG_ERR(fmt, ...)
  */
 
-/* ONLY UNCOMMENT THIS TO GET SYNTAX HIGHLIGHTING, DONT FORGET TO COMMENT IT BACK
+//* ONLY UNCOMMENT THIS TO GET SYNTAX HIGHLIGHTING, DONT FORGET TO COMMENT IT BACK
 #define POLLEN_IMPLEMENTATION
 //*/
 
@@ -295,6 +295,7 @@ struct pollen_loop {
     int n_signal_callbacks;
     int signal_fd;
     sigset_t sigset;
+    struct pollen_callback signalfd_callback;
 
     struct pollen_ll fd_callbacks_list;
     struct pollen_ll idle_callbacks_list;
@@ -302,14 +303,14 @@ struct pollen_loop {
     struct pollen_ll timer_callbacks_list;
 };
 
-/* this function itself is a callback that will get called on signalfd events */
-int pollen_signal_handler(struct pollen_callback *callback, int fd, uint32_t events, void *data) {
+/* not an actual real callback, more like a hack to hook signal handling into the loop */
+static int pollen_internal_signal_handler(struct pollen_callback *callback, int _, void *__) {
     struct pollen_loop *loop = callback->loop;
 
     /* TODO: figure out why does this always only read only one siginfo */
     int ret;
     struct signalfd_siginfo siginfo;
-    while ((ret = read(fd, &siginfo, sizeof(siginfo))) == sizeof(siginfo)) {
+    while ((ret = read(loop->signal_fd, &siginfo, sizeof(siginfo))) == sizeof(siginfo)) {
         int signal = siginfo.ssi_signo;
         POLLEN_LOG_DEBUG("received signal %d via signalfd", signal);
 
@@ -336,7 +337,6 @@ int pollen_signal_handler(struct pollen_callback *callback, int fd, uint32_t eve
             return -1;
         }
     }
-
 }
 
 struct pollen_loop *pollen_loop_create(void) {
@@ -362,7 +362,12 @@ struct pollen_loop *pollen_loop_create(void) {
         goto err;
     }
 
-    /* TODO: don't create signalfd until the first signal callback is added? */
+    /*
+     * Setup signalfd now, there's a dummy callback in the event loop struct
+     * that lets us insert signal handling in the loop more easily.
+     *
+     * TODO: don't create signalfd until the first signal callback is added?
+     */
     sigemptyset(&loop->sigset);
     loop->signal_fd = signalfd(-1, &loop->sigset, SFD_NONBLOCK | SFD_CLOEXEC);
     if (loop->signal_fd < 0) {
@@ -370,11 +375,19 @@ struct pollen_loop *pollen_loop_create(void) {
         POLLEN_LOG_ERR("failed to create signalfd: %s", strerror(errno));
         goto err;
     }
-    if (pollen_loop_add_fd(loop, loop->signal_fd, EPOLLIN, false,
-                           pollen_signal_handler, NULL) == NULL) {
-        /* bruh moment */
+
+    loop->signalfd_callback.loop = loop;
+    loop->signalfd_callback.type = POLLEN_CALLBACK_TYPE_SIGNAL;
+    loop->signalfd_callback.as.signal.sig = 0xDEAD;
+    loop->signalfd_callback.as.signal.callback = pollen_internal_signal_handler;
+    loop->signalfd_callback.data = NULL;
+
+    struct epoll_event signalfd_epoll_event;
+    signalfd_epoll_event.events = EPOLLIN;
+    signalfd_epoll_event.data.ptr = &loop->signalfd_callback;
+    if (epoll_ctl(loop->epoll_fd, EPOLL_CTL_ADD, loop->signal_fd, &signalfd_epoll_event) < 0) {
         save_errno = errno;
-        POLLEN_LOG_ERR("failed to add signal handler callback: %s", strerror(errno));
+        POLLEN_LOG_ERR("failed to add fd %d to epoll: %s", loop->signal_fd, strerror(errno));
         goto err;
     }
 
@@ -788,6 +801,11 @@ int pollen_loop_run(struct pollen_loop *loop) {
                 }
 
                 ret = callback->as.timer.callback(callback, callback->data);
+                break;
+            case POLLEN_CALLBACK_TYPE_SIGNAL:
+                POLLEN_LOG_DEBUG("running internal signals handler");
+
+                ret = callback->as.signal.callback(callback, 0xDEAD, NULL);
                 break;
             default:
                 POLLEN_LOG_ERR("got invalid callback type from epoll");
