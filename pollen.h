@@ -120,7 +120,7 @@ struct pollen_callback *pollen_loop_add_fd(struct pollen_loop *loop,
  * Callbacks with higher priority will run before callbacks with lower priority.
  * If two callbacks have equal priority, the order is undefined.
  *
- * Return NULL and sets errno on failure.
+ * Returns NULL and sets errno on failure.
  */
 struct pollen_callback *pollen_loop_add_idle(struct pollen_loop *loop, int priority,
                                              pollen_idle_callback_fn callback,
@@ -130,7 +130,7 @@ struct pollen_callback *pollen_loop_add_idle(struct pollen_loop *loop, int prior
  * Adds a callback that will run when signal is caught.
  * This function tries to preserve original sigmask if it fails.
  *
- * Return NULL and sets errno on failure.
+ * Returns NULL and sets errno on failure.
  */
 struct pollen_callback *pollen_loop_add_signal(struct pollen_loop *loop, int signal,
                                                pollen_signal_callback_fn callback,
@@ -139,7 +139,7 @@ struct pollen_callback *pollen_loop_add_signal(struct pollen_loop *loop, int sig
 /*
  * Adds a callback that will run periodically every delay_ms milliseconds.
  *
- * Return NULL and sets errno on failure.
+ * Returns NULL and sets errno on failure.
  */
 struct pollen_callback *pollen_loop_add_timer(struct pollen_loop *loop, unsigned long delay_ms,
                                               pollen_timer_callback_fn callback,
