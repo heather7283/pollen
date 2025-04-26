@@ -21,7 +21,7 @@
  * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
  * SOFTWARE.
  *
- * pollen version 1.0.0
+ * pollen version 1.0.1
  * latest version is available at: https://github.com/heather7283/pollen
  *
  * This is a single-header library that provides simple event loop abstraction built on epoll.
@@ -353,6 +353,7 @@ struct pollen_loop *pollen_loop_create(void) {
     pollen_ll_init(&loop->fd_callbacks_list);
     pollen_ll_init(&loop->idle_callbacks_list);
     pollen_ll_init(&loop->signal_callbacks_list);
+    pollen_ll_init(&loop->timer_callbacks_list);
 
     loop->epoll_fd = epoll_create1(0);
     if (loop->epoll_fd < 0) {
@@ -401,6 +402,9 @@ void pollen_loop_cleanup(struct pollen_loop *loop) {
         pollen_loop_remove_callback(callback);
     }
     POLLEN_LL_FOR_EACH_SAFE(callback, callback_tmp, &loop->fd_callbacks_list, link) {
+        pollen_loop_remove_callback(callback);
+    }
+    POLLEN_LL_FOR_EACH_SAFE(callback, callback_tmp, &loop->timer_callbacks_list, link) {
         pollen_loop_remove_callback(callback);
     }
 
@@ -649,7 +653,7 @@ struct pollen_callback *pollen_loop_add_timer(struct pollen_loop *loop, unsigned
         goto err;
     }
 
-    pollen_ll_insert(&loop->fd_callbacks_list, &new_callback->link);
+    pollen_ll_insert(&loop->timer_callbacks_list, &new_callback->link);
 
     return new_callback;
 
