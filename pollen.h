@@ -94,6 +94,8 @@ typedef int (*pollen_idle_callback_fn)(struct pollen_callback *callback,
                                        void *data);
 typedef int (*pollen_signal_callback_fn)(struct pollen_callback *callback,
                                          int signum, void *data);
+typedef int (*pollen_timer_callback_fn)(struct pollen_callback *callback,
+                                        void *data);
 
 /* Creates a new pollen_loop instance. Returns NULL and sets errno on failure. */
 struct pollen_loop *pollen_loop_create(void);
@@ -135,6 +137,15 @@ struct pollen_callback *pollen_loop_add_signal(struct pollen_loop *loop, int sig
                                                void *data);
 
 /*
+ * Adds a callback that will run periodically every delay_ms milliseconds.
+ *
+ * Return NULL and sets errno on failure.
+ */
+struct pollen_callback *pollen_loop_add_timer(struct pollen_loop *loop, unsigned long delay_ms,
+                                              pollen_timer_callback_fn callback,
+                                              void *data);
+
+/*
  * Remove a callback from event loop.
  *
  * For fd callbacks, this function will close the fd if autoclose=true.
@@ -167,6 +178,7 @@ void pollen_loop_quit(struct pollen_loop *loop, int retcode);
 #ifdef POLLEN_IMPLEMENTATION
 
 #include <sys/signalfd.h>
+#include <sys/timerfd.h>
 #include <errno.h>
 #include <unistd.h>
 #include <stddef.h>
@@ -241,6 +253,7 @@ enum pollen_callback_type {
     POLLEN_CALLBACK_TYPE_FD,
     POLLEN_CALLBACK_TYPE_IDLE,
     POLLEN_CALLBACK_TYPE_SIGNAL,
+    POLLEN_CALLBACK_TYPE_TIMER,
 };
 
 struct pollen_callback {
@@ -261,6 +274,10 @@ struct pollen_callback {
             int sig;
             pollen_signal_callback_fn callback;
         } signal;
+        struct {
+            int fd;
+            pollen_timer_callback_fn callback;
+        } timer;
     } as;
 
     void *data;
@@ -282,6 +299,7 @@ struct pollen_loop {
     struct pollen_ll fd_callbacks_list;
     struct pollen_ll idle_callbacks_list;
     struct pollen_ll signal_callbacks_list;
+    struct pollen_ll timer_callbacks_list;
 };
 
 /* this function itself is a callback that will get called on signalfd events */
@@ -577,6 +595,73 @@ err:
     return NULL;
 }
 
+/*
+ * Adds a callback that will run periodically every delay_ms milliseconds.
+ *
+ * Return NULL and sets errno on failure.
+ */
+struct pollen_callback *pollen_loop_add_timer(struct pollen_loop *loop, unsigned long delay_ms,
+                                              pollen_timer_callback_fn callback,
+                                              void *data) {
+    struct pollen_callback *new_callback = NULL;
+    int save_errno = 0;
+    int tfd = -1;
+
+    POLLEN_LOG_INFO("adding timer callback to event loop, delay %lu ms", delay_ms);
+
+    struct itimerspec itimerspec;
+    itimerspec.it_interval.tv_sec = delay_ms / 1000;
+    itimerspec.it_interval.tv_nsec = (delay_ms % 1000) * 1000000L;
+    itimerspec.it_value.tv_sec = delay_ms / 1000;
+    itimerspec.it_value.tv_nsec = (delay_ms % 1000) * 1000000L;
+
+    tfd = timerfd_create(CLOCK_MONOTONIC, TFD_NONBLOCK | TFD_CLOEXEC);
+    if (tfd < 0) {
+        save_errno = errno;
+        POLLEN_LOG_ERR("failed to create timerfd: %s", strerror(errno));
+        goto err;
+    }
+
+    if (timerfd_settime(tfd, 0, &itimerspec, NULL) < 0) {
+        save_errno = errno;
+        POLLEN_LOG_ERR("failed to arm timer: %s", strerror(errno));
+        goto err;
+    }
+
+    new_callback = POLLEN_CALLOC(1, sizeof(*new_callback));
+    if (new_callback == NULL) {
+        save_errno = errno;
+        POLLEN_LOG_ERR("failed to allocate memory for callback: %s", strerror(errno));
+        goto err;
+    }
+    new_callback->loop = loop;
+    new_callback->type = POLLEN_CALLBACK_TYPE_TIMER;
+    new_callback->as.timer.fd = tfd;
+    new_callback->as.timer.callback = callback;
+    new_callback->data = data;
+
+    struct epoll_event epoll_event;
+    epoll_event.events = EPOLLIN;
+    epoll_event.data.ptr = new_callback;
+    if (epoll_ctl(loop->epoll_fd, EPOLL_CTL_ADD, tfd, &epoll_event) < 0) {
+        save_errno = errno;
+        POLLEN_LOG_ERR("failed to add fd %d to epoll: %s", tfd, strerror(errno));
+        goto err;
+    }
+
+    pollen_ll_insert(&loop->fd_callbacks_list, &new_callback->link);
+
+    return new_callback;
+
+err:
+    if (tfd > 0) {
+        close(tfd);
+    }
+    POLLEN_FREE(new_callback);
+    errno = save_errno;
+    return NULL;
+}
+
 void pollen_loop_remove_callback(struct pollen_callback *callback) {
     switch (callback->type) {
     case POLLEN_CALLBACK_TYPE_FD: {
@@ -627,6 +712,20 @@ void pollen_loop_remove_callback(struct pollen_callback *callback) {
         loop->n_signal_callbacks -= 1;
         break;
     }
+    case POLLEN_CALLBACK_TYPE_TIMER: {
+        int tfd = callback->as.timer.fd;
+
+        POLLEN_LOG_INFO("removing timer callback with tfd %d for from event loop", tfd);
+
+        if (epoll_ctl(callback->loop->epoll_fd, EPOLL_CTL_DEL, tfd, NULL) < 0) {
+            POLLEN_LOG_WARN("failed to remove tfd %d from epoll: %s", tfd, strerror(errno));
+        }
+
+        if (close(tfd) < 0) {
+            POLLEN_LOG_WARN("closing tfd %d failed: %s", tfd, strerror(errno));
+        };
+        break;
+    }
     }
 
     pollen_ll_remove(&callback->link);
@@ -663,10 +762,35 @@ int pollen_loop_run(struct pollen_loop *loop) {
         for (int n = 0; n < number_fds; n++) {
             struct pollen_callback *callback = events[n].data.ptr;
 
-            POLLEN_LOG_DEBUG("running callback for fd %d", callback->as.fd.fd);
+            switch (callback->type) {
+            case POLLEN_CALLBACK_TYPE_FD:
+                POLLEN_LOG_DEBUG("running callback for fd %d", callback->as.fd.fd);
+                ret = callback->as.fd.callback(callback, callback->as.fd.fd,
+                                               events[n].events, callback->data);
+                break;
+            case POLLEN_CALLBACK_TYPE_TIMER:
+                POLLEN_LOG_DEBUG("running callback for timer on tfd %d", callback->as.timer.fd);
 
-            ret = callback->as.fd.callback(callback, callback->as.fd.fd,
-                                           events[n].events, callback->data);
+                /* drain the timer fd */
+                uint64_t dummy;
+                while ((ret = read(callback->as.timer.fd, &dummy, sizeof(dummy))) > 0) {
+                    /* no-op */
+                }
+                if (ret < 0 && errno != EAGAIN) {
+                    POLLEN_LOG_ERR("failed to read from timerfd %d: %s",
+                                   callback->as.timer.fd, strerror(errno));
+                    loop->retcode = ret;
+                    goto out;
+                }
+
+                ret = callback->as.timer.callback(callback, callback->data);
+                break;
+            default:
+                POLLEN_LOG_ERR("got invalid callback type from epoll");
+                loop->retcode = -1;
+                goto out;
+            }
+
             if (ret < 0) {
                 POLLEN_LOG_ERR("callback returned %d, quitting", ret);
                 loop->retcode = ret;

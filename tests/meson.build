@@ -6,6 +6,7 @@ test_sources = [
   '04_idle_priority.c',
   '05_closure.c',
   '06_signal.c',
+  '07_timer.c',
 ]
 
 add_project_arguments('-Wno-unused-parameter', language: 'c')
