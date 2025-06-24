@@ -1,5 +1,5 @@
 /*
- * pollen version 1.0.5
+ * pollen version 1.1.0
  * latest version is available at: https://github.com/heather7283/pollen
  *
  * This is a single-header library that provides simple event loop abstraction built on epoll.
@@ -66,6 +66,8 @@ typedef int (*pollen_signal_callback_fn)(struct pollen_callback *callback,
                                          int signum, void *data);
 typedef int (*pollen_timer_callback_fn)(struct pollen_callback *callback,
                                         void *data);
+typedef int (*pollen_efd_callback_fn)(struct pollen_callback *callback,
+                                      uint64_t val, void *data);
 
 /* Creates a new pollen_loop instance. Returns NULL and sets errno on failure. */
 struct pollen_loop *pollen_loop_create(void);
@@ -116,6 +118,26 @@ struct pollen_callback *pollen_loop_add_timer(struct pollen_loop *loop, unsigned
                                               void *data);
 
 /*
+ * This is a convenience wrapper around eventfd(2).
+ * Use pollen_efd_signal() to increment the efd and cause the callback to run.
+ * The efd will be automatically reset before running the callback.
+ *
+ * Returns NULL and sets errno on failure.
+ */
+struct pollen_callback *pollen_loop_add_efd(struct pollen_loop *loop,
+                                            pollen_efd_callback_fn callback,
+                                            void *data);
+
+/*
+ * Write n to the efd corresponding to callback,
+ * causing it to run on the next event loop iteration.
+ * Callback must have been created by a call to pollen_loop_add_efd().
+ *
+ * Returns 0 on success, -1 on failure and sets errno.
+ */
+int pollen_efd_signal(struct pollen_callback *callback, uint64_t n);
+
+/*
  * Remove a callback from event loop.
  *
  * For fd callbacks, this function will close the fd if autoclose=true.
@@ -149,6 +171,7 @@ void pollen_loop_quit(struct pollen_loop *loop, int retcode);
 
 #include <sys/signalfd.h>
 #include <sys/timerfd.h>
+#include <sys/eventfd.h>
 #include <errno.h>
 #include <unistd.h>
 #include <stddef.h>
@@ -224,6 +247,7 @@ enum pollen_callback_type {
     POLLEN_CALLBACK_TYPE_IDLE,
     POLLEN_CALLBACK_TYPE_SIGNAL,
     POLLEN_CALLBACK_TYPE_TIMER,
+    POLLEN_CALLBACK_TYPE_EFD,
 };
 
 struct pollen_callback {
@@ -248,6 +272,10 @@ struct pollen_callback {
             int fd;
             pollen_timer_callback_fn callback;
         } timer;
+        struct {
+            int efd;
+            pollen_efd_callback_fn callback;
+        } efd;
     } as;
 
     void *data;
@@ -270,6 +298,7 @@ struct pollen_loop {
     struct pollen_ll idle_callbacks_list;
     struct pollen_ll signal_callbacks_list;
     struct pollen_ll timer_callbacks_list;
+    struct pollen_ll efd_callbacks_list;
 };
 
 /* not an actual real callback, more like a hack to hook signal handling into the loop */
@@ -349,6 +378,7 @@ struct pollen_loop *pollen_loop_create(void) {
     pollen_ll_init(&loop->idle_callbacks_list);
     pollen_ll_init(&loop->signal_callbacks_list);
     pollen_ll_init(&loop->timer_callbacks_list);
+    pollen_ll_init(&loop->efd_callbacks_list);
 
     loop->epoll_fd = epoll_create1(EPOLL_CLOEXEC);
     if (loop->epoll_fd < 0) {
@@ -586,11 +616,6 @@ err:
     return NULL;
 }
 
-/*
- * Adds a callback that will run periodically every delay_ms milliseconds.
- *
- * Return NULL and sets errno on failure.
- */
 struct pollen_callback *pollen_loop_add_timer(struct pollen_loop *loop, unsigned long delay_ms,
                                               pollen_timer_callback_fn callback,
                                               void *data) {
@@ -653,6 +678,74 @@ err:
     return NULL;
 }
 
+struct pollen_callback *pollen_loop_add_efd(struct pollen_loop *loop,
+                                            pollen_efd_callback_fn callback,
+                                            void *data) {
+    struct pollen_callback *new_callback = NULL;
+    int save_errno = 0;
+
+    POLLEN_LOG_INFO("adding efd callback to event loop");
+
+    int efd = eventfd(0, EFD_CLOEXEC);
+    if (efd < 0) {
+        save_errno = errno;
+        POLLEN_LOG_ERR("failed to create eventfd: %s", strerror(errno));
+        goto err;
+    }
+
+    new_callback = POLLEN_CALLOC(1, sizeof(*new_callback));
+    if (new_callback == NULL) {
+        save_errno = errno;
+        POLLEN_LOG_ERR("failed to allocate memory for callback: %s", strerror(errno));
+        goto err;
+    }
+    new_callback->loop = loop;
+    new_callback->type = POLLEN_CALLBACK_TYPE_EFD;
+    new_callback->as.efd.efd = efd;
+    new_callback->as.efd.callback = callback;
+    new_callback->data = data;
+
+    struct epoll_event epoll_event;
+    epoll_event.events = EPOLLIN;
+    epoll_event.data.ptr = new_callback;
+    if (epoll_ctl(loop->epoll_fd, EPOLL_CTL_ADD, efd, &epoll_event) < 0) {
+        save_errno = errno;
+        POLLEN_LOG_ERR("failed to add fd %d to epoll: %s", efd, strerror(errno));
+        goto err;
+    }
+
+    pollen_ll_insert(&loop->efd_callbacks_list, &new_callback->link);
+
+    return new_callback;
+
+err:
+    POLLEN_FREE(new_callback);
+    errno = save_errno;
+    return NULL;
+}
+
+int pollen_efd_signal(struct pollen_callback *callback, uint64_t n) {
+    int save_errno;
+
+    if (callback->type != POLLEN_CALLBACK_TYPE_EFD) {
+        POLLEN_LOG_ERR("passed non-efd type callback to pollen_efd_signal");
+        save_errno = EINVAL;
+        goto err;
+    }
+
+    if (write(callback->as.efd.efd, &n, sizeof(n)) < 0) {
+        save_errno = errno;
+        POLLEN_LOG_ERR("failed to write to efd %d: %s", callback->as.efd.efd, strerror(errno));
+        goto err;
+    }
+
+    return 0;
+
+err:
+    errno = save_errno;
+    return -1;
+}
+
 void pollen_loop_remove_callback(struct pollen_callback *callback) {
     switch (callback->type) {
     case POLLEN_CALLBACK_TYPE_FD: {
@@ -713,6 +806,20 @@ void pollen_loop_remove_callback(struct pollen_callback *callback) {
 
         if (close(tfd) < 0) {
             POLLEN_LOG_WARN("closing tfd %d failed: %s", tfd, strerror(errno));
+        };
+        break;
+    }
+    case POLLEN_CALLBACK_TYPE_EFD: {
+        int efd = callback->as.efd.efd;
+
+        POLLEN_LOG_INFO("removing efd callback for efd %d from event loop", efd);
+
+        if (epoll_ctl(callback->loop->epoll_fd, EPOLL_CTL_DEL, efd, NULL) < 0) {
+            POLLEN_LOG_WARN("failed to remove efd %d from epoll: %s", efd, strerror(errno));
+        }
+
+        if (close(efd) < 0) {
+            POLLEN_LOG_WARN("closing efd %d failed: %s", efd, strerror(errno));
         };
         break;
     }
@@ -779,6 +886,19 @@ int pollen_loop_run(struct pollen_loop *loop) {
                 POLLEN_LOG_DEBUG("running internal signals handler");
 
                 ret = callback->as.signal.callback(callback, 0xDEAD, NULL);
+                break;
+            case POLLEN_CALLBACK_TYPE_EFD:
+                POLLEN_LOG_DEBUG("running callback for efd %d", callback->as.efd.efd);
+
+                uint64_t efd_val;
+                if (read(callback->as.efd.efd, &efd_val, sizeof(efd_val)) < 0) {
+                    POLLEN_LOG_ERR("failed to read from efd %d: %s",
+                                   callback->as.efd.efd, strerror(errno));
+                    loop->retcode = -1;
+                    goto out;
+                }
+
+                ret = callback->as.efd.callback(callback, efd_val, callback->data);
                 break;
             default:
                 POLLEN_LOG_ERR("got invalid callback type from epoll");
