@@ -8,6 +8,7 @@ test_sources = [
   '06_signal.c',
   '07_timer.c',
   '08_more_signals.c',
+  '09_eventfd.c',
 ]
 
 add_project_arguments('-Wno-unused-parameter', language: 'c')
