@@ -1,3 +1,4 @@
+#include <stdio.h>
 #include <assert.h>
 
 #define POLLEN_LOG_DEBUG(fmt, ...) fprintf(stderr, "DEBUG: "fmt"\n", ##__VA_ARGS__)
