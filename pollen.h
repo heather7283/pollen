@@ -21,7 +21,7 @@
  * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
  * SOFTWARE.
  *
- * pollen version 1.0.3
+ * pollen version 1.0.4
  * latest version is available at: https://github.com/heather7283/pollen
  *
  * This is a single-header library that provides simple event loop abstraction built on epoll.
@@ -61,25 +61,17 @@
     #define POLLEN_FREE(ptr) free(ptr)
 #endif
 
-/*
- * doing this to avoid compiler warning:
- * passing no argument for the '...' parameter of a variadic macro is a C23 extension
- */
-#if !defined(POLLEN_DEBUG)  || !defined(POLLEN_INFO) || \
-    !defined(POLLEN_WARN) || !defined(POLLEN_ERR)
-    #include <stdio.h> /* printf() */
-#endif
 #if !defined(POLLEN_LOG_DEBUG)
-    #define POLLEN_LOG_DEBUG(fmt, ...) if (0) printf(fmt, ##__VA_ARGS__)
+    #define POLLEN_LOG_DEBUG(...) #__VA_ARGS__
 #endif
 #if !defined(POLLEN_LOG_INFO)
-    #define POLLEN_LOG_INFO(fmt, ...) if (0) printf(fmt, ##__VA_ARGS__)
+    #define POLLEN_LOG_INFO(...) #__VA_ARGS__
 #endif
 #if !defined(POLLEN_LOG_WARN)
-    #define POLLEN_LOG_WARN(fmt, ...) if (0) printf(fmt, ##__VA_ARGS__)
+    #define POLLEN_LOG_WARN(...) #__VA_ARGS__
 #endif
 #if !defined(POLLEN_LOG_ERR)
-    #define POLLEN_LOG_ERR(fmt, ...) if (0) printf(fmt, ##__VA_ARGS__)
+    #define POLLEN_LOG_ERR(...) #__VA_ARGS__
 #endif
 
 #include <sys/epoll.h>

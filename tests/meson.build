@@ -10,6 +10,9 @@ test_sources = [
   '08_more_signals.c',
 ]
 
+# needed for ##__VA_ARGS__
+add_project_arguments('-Wno-gnu-zero-variadic-macro-arguments', language: 'c')
+
 add_project_arguments('-Wno-unused-parameter', language: 'c')
 
 foreach test_source: test_sources
