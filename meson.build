@@ -7,7 +7,5 @@ project('pollen','c',
 # needed for ##__VA_ARGS__
 add_project_arguments('-Wno-gnu-zero-variadic-macro-arguments', language: 'c')
 
-if get_option('test')
-  subdir('tests')
-endif
+subdir('tests')
 
