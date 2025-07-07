@@ -21,7 +21,7 @@
  * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
  * SOFTWARE.
  *
- * pollen version 1.0.4
+ * pollen version 1.0.5
  * latest version is available at: https://github.com/heather7283/pollen
  *
  * This is a single-header library that provides simple event loop abstraction built on epoll.
@@ -282,12 +282,11 @@ struct pollen_loop {
     int retcode;
     int epoll_fd;
 
-    /* signal(7) says there are 38 standard signals on linux */
+    /* signal(7) says there are 38 standard signals on linux.
+     * TODO: this is cringe. Use a proper hashmap? */
     struct pollen_callback *signal_callbacks[38];
-    int n_signal_callbacks;
     int signal_fd;
     sigset_t sigset;
-    struct pollen_callback signalfd_callback;
 
     struct pollen_ll fd_callbacks_list;
     struct pollen_ll idle_callbacks_list;
@@ -296,8 +295,9 @@ struct pollen_loop {
 };
 
 /* not an actual real callback, more like a hack to hook signal handling into the loop */
-static int pollen_internal_signal_handler(struct pollen_callback *callback, int _, void *__) {
-    struct pollen_loop *loop = callback->loop;
+static int pollen_internal_signal_handler(struct pollen_callback *callback, int fd,
+                                          unsigned int events, void *data) {
+    struct pollen_loop *loop = data;
 
     /* TODO: figure out why does this always only read only one siginfo */
     int ret;
@@ -331,6 +331,31 @@ static int pollen_internal_signal_handler(struct pollen_callback *callback, int 
     }
 }
 
+static int pollen_internal_setup_signalfd(struct pollen_loop *loop) {
+    int save_errno = 0;
+    POLLEN_LOG_DEBUG("setting up signalfd");
+
+    sigemptyset(&loop->sigset);
+    loop->signal_fd = signalfd(-1, &loop->sigset, SFD_NONBLOCK | SFD_CLOEXEC);
+    if (loop->signal_fd < 0) {
+        save_errno = errno;
+        POLLEN_LOG_ERR("failed to create signalfd: %s", strerror(errno));
+        goto err;
+    }
+
+    if (pollen_loop_add_fd(loop, loop->signal_fd, EPOLLIN, false,
+                           pollen_internal_signal_handler, loop) == NULL) {
+        save_errno = errno;
+        goto err;
+    }
+
+    return 0;
+
+err:
+    errno = save_errno;
+    return -1;
+}
+
 struct pollen_loop *pollen_loop_create(void) {
     POLLEN_LOG_INFO("creating event loop");
     int save_errno = 0;
@@ -354,34 +379,8 @@ struct pollen_loop *pollen_loop_create(void) {
         goto err;
     }
 
-    /*
-     * Setup signalfd now, there's a dummy callback in the event loop struct
-     * that lets us insert signal handling in the loop more easily.
-     *
-     * TODO: don't create signalfd until the first signal callback is added?
-     */
-    sigemptyset(&loop->sigset);
-    loop->signal_fd = signalfd(-1, &loop->sigset, SFD_NONBLOCK | SFD_CLOEXEC);
-    if (loop->signal_fd < 0) {
-        save_errno = errno;
-        POLLEN_LOG_ERR("failed to create signalfd: %s", strerror(errno));
-        goto err;
-    }
-
-    loop->signalfd_callback.loop = loop;
-    loop->signalfd_callback.type = POLLEN_CALLBACK_TYPE_SIGNAL;
-    loop->signalfd_callback.as.signal.sig = 0xDEAD;
-    loop->signalfd_callback.as.signal.callback = pollen_internal_signal_handler;
-    loop->signalfd_callback.data = NULL;
-
-    struct epoll_event signalfd_epoll_event;
-    signalfd_epoll_event.events = EPOLLIN;
-    signalfd_epoll_event.data.ptr = &loop->signalfd_callback;
-    if (epoll_ctl(loop->epoll_fd, EPOLL_CTL_ADD, loop->signal_fd, &signalfd_epoll_event) < 0) {
-        save_errno = errno;
-        POLLEN_LOG_ERR("failed to add fd %d to epoll: %s", loop->signal_fd, strerror(errno));
-        goto err;
-    }
+    /* signalfd will be set up when first signal callback is added */
+    loop->signal_fd = -1;
 
     return loop;
 
@@ -413,7 +412,9 @@ void pollen_loop_cleanup(struct pollen_loop *loop) {
         pollen_loop_remove_callback(callback);
     }
 
-    close(loop->signal_fd);
+    if (loop->signal_fd > 0) {
+        close(loop->signal_fd);
+    }
     close(loop->epoll_fd);
 
     POLLEN_FREE(loop);
@@ -522,6 +523,10 @@ struct pollen_callback *pollen_loop_add_signal(struct pollen_loop *loop, int sig
 
     POLLEN_LOG_INFO("adding signal callback for signal %d", signal);
 
+    if (loop->signal_fd < 0 && pollen_internal_setup_signalfd(loop) < 0) {
+        goto err;
+    }
+
     if (sigprocmask(SIG_BLOCK /* ignored */, NULL, &save_global_sigset) < 0) {
         save_errno = errno;
         POLLEN_LOG_ERR("failed to save original sigmask: %s", strerror(errno));
@@ -571,7 +576,6 @@ struct pollen_callback *pollen_loop_add_signal(struct pollen_loop *loop, int sig
         goto err;
     }
     loop->signal_callbacks[signal] = new_callback;
-    loop->n_signal_callbacks += 1;
     need_reset_handler = true;
 
     /* change signalfd mask to report newly added signal */
@@ -718,7 +722,6 @@ void pollen_loop_remove_callback(struct pollen_callback *callback) {
         };
 
         loop->signal_callbacks[signal] = NULL;
-        loop->n_signal_callbacks -= 1;
         break;
     }
     case POLLEN_CALLBACK_TYPE_TIMER: {
