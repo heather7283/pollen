@@ -52,6 +52,7 @@
     #define POLLEN_LOG_ERR(...) #__VA_ARGS__
 #endif
 
+#include <sys/timerfd.h>
 #include <sys/epoll.h>
 #include <signal.h>
 #include <stdint.h>
@@ -107,13 +108,39 @@ struct pollen_callback *pollen_loop_add_signal(struct pollen_loop *loop, int sig
                                                void *data);
 
 /*
- * Adds a callback that will run periodically every delay_ms milliseconds.
+ * Adds a timerfd-based timer callback.
+ * Arm/disarm the timer with pollen_timer_arm/disarm functions.
  *
  * Returns NULL and sets errno on failure.
  */
-struct pollen_callback *pollen_loop_add_timer(struct pollen_loop *loop, unsigned long delay_ms,
+struct pollen_callback *pollen_loop_add_timer(struct pollen_loop *loop,
                                               pollen_timer_callback_fn callback,
                                               void *data);
+
+/*
+ * Arms the timer to expire once after initial_ms milliseconds,
+ * and then repeatedly every periodic_ms milliseconds.
+ *
+ * Sets errno and returns false on failre, true on success.
+ */
+bool pollen_timer_arm(struct pollen_callback *callback,
+                      unsigned long initial_ms, unsigned long periodic_ms);
+
+/*
+ * Arms the timer to expire once after initial_ns nanoseconds,
+ * and then repeatedly every periodic_ns nanoseconds.
+ *
+ * Sets errno and returns false on failre, true on success.
+ */
+bool pollen_timer_arm_ns(struct pollen_callback *callback,
+                         unsigned long initial_ns, unsigned long periodic_ns);
+
+/*
+ * Disarms the timer.
+ *
+ * Sets errno and returns false on failre, true on success.
+ */
+bool pollen_timer_disarm(struct pollen_callback *callback);
 
 /*
  * Remove a callback from event loop.
@@ -150,7 +177,6 @@ void pollen_loop_quit(struct pollen_loop *loop, int retcode);
 #ifdef POLLEN_IMPLEMENTATION
 
 #include <sys/signalfd.h>
-#include <sys/timerfd.h>
 #include <errno.h>
 #include <unistd.h>
 #include <stddef.h>
@@ -593,31 +619,19 @@ err:
  *
  * Return NULL and sets errno on failure.
  */
-struct pollen_callback *pollen_loop_add_timer(struct pollen_loop *loop, unsigned long delay_ms,
+struct pollen_callback *pollen_loop_add_timer(struct pollen_loop *loop,
                                               pollen_timer_callback_fn callback,
                                               void *data) {
     struct pollen_callback *new_callback = NULL;
     int save_errno = 0;
     int tfd = -1;
 
-    POLLEN_LOG_INFO("adding timer callback to event loop, delay %lu ms", delay_ms);
-
-    struct itimerspec itimerspec;
-    itimerspec.it_interval.tv_sec = delay_ms / 1000;
-    itimerspec.it_interval.tv_nsec = (delay_ms % 1000) * 1000000L;
-    itimerspec.it_value.tv_sec = delay_ms / 1000;
-    itimerspec.it_value.tv_nsec = (delay_ms % 1000) * 1000000L;
+    POLLEN_LOG_INFO("adding timer callback to event loop");
 
     tfd = timerfd_create(CLOCK_MONOTONIC, TFD_NONBLOCK | TFD_CLOEXEC);
     if (tfd < 0) {
         save_errno = errno;
         POLLEN_LOG_ERR("failed to create timerfd: %s", strerror(errno));
-        goto err;
-    }
-
-    if (timerfd_settime(tfd, 0, &itimerspec, NULL) < 0) {
-        save_errno = errno;
-        POLLEN_LOG_ERR("failed to arm timer: %s", strerror(errno));
         goto err;
     }
 
@@ -653,6 +667,89 @@ err:
     POLLEN_FREE(new_callback);
     errno = save_errno;
     return NULL;
+}
+
+bool pollen_timer_arm(struct pollen_callback *callback,
+                      unsigned long initial_ms, unsigned long periodic_ms) {
+    int save_errno = 0;
+
+    if (callback->type != POLLEN_CALLBACK_TYPE_TIMER) {
+        save_errno = EINVAL;
+        goto err;
+    }
+
+    struct itimerspec itimerspec;
+    itimerspec.it_value.tv_sec = initial_ms / 1000;
+    itimerspec.it_value.tv_nsec = (initial_ms % 1000) * 1000000L;
+    itimerspec.it_interval.tv_sec = periodic_ms / 1000;
+    itimerspec.it_interval.tv_nsec = (periodic_ms % 1000) * 1000000L;
+
+    if (timerfd_settime(callback->as.timer.fd, 0, &itimerspec, NULL) < 0) {
+        save_errno = errno;
+        POLLEN_LOG_ERR("failed to arm timer: %s", strerror(errno));
+        goto err;
+    }
+
+    return true;
+
+err:
+    errno = save_errno;
+    return false;
+}
+
+bool pollen_timer_arm_ns(struct pollen_callback *callback,
+                         unsigned long initial_ns, unsigned long periodic_ns) {
+    int save_errno = 0;
+
+    if (callback->type != POLLEN_CALLBACK_TYPE_TIMER) {
+        save_errno = EINVAL;
+        goto err;
+    }
+
+    struct itimerspec itimerspec;
+    itimerspec.it_value.tv_sec = initial_ns / 1000000000;
+    itimerspec.it_value.tv_nsec = initial_ns % 1000000000;
+    itimerspec.it_interval.tv_sec = periodic_ns / 1000000000;
+    itimerspec.it_interval.tv_nsec = periodic_ns % 1000000000;
+
+    if (timerfd_settime(callback->as.timer.fd, 0, &itimerspec, NULL) < 0) {
+        save_errno = errno;
+        POLLEN_LOG_ERR("failed to arm timer: %s", strerror(errno));
+        goto err;
+    }
+
+    return true;
+
+err:
+    errno = save_errno;
+    return false;
+}
+
+bool pollen_timer_disarm(struct pollen_callback *callback) {
+    int save_errno = 0;
+
+    if (callback->type != POLLEN_CALLBACK_TYPE_TIMER) {
+        save_errno = EINVAL;
+        goto err;
+    }
+
+    struct itimerspec itimerspec;
+    itimerspec.it_value.tv_sec = 0;
+    itimerspec.it_value.tv_nsec = 0;
+    itimerspec.it_interval.tv_sec = 0;
+    itimerspec.it_interval.tv_nsec = 0;
+
+    if (timerfd_settime(callback->as.timer.fd, 0, &itimerspec, NULL) < 0) {
+        save_errno = errno;
+        POLLEN_LOG_ERR("failed to disarm timer: %s", strerror(errno));
+        goto err;
+    }
+
+    return true;
+
+err:
+    errno = save_errno;
+    return false;
 }
 
 void pollen_loop_remove_callback(struct pollen_callback *callback) {

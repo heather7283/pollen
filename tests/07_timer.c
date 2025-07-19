@@ -47,7 +47,7 @@ int timer_callback(struct pollen_callback *callback, void *data) {
     struct timespec ts_elapsed = timespec_sub(&ts_now, ts_start);
     fprintf(stderr, "elapsed: %lus%lums\n", ts_elapsed.tv_sec, ts_elapsed.tv_nsec / 1000000L);
 
-    if (++counter == 5) {
+    if (counter++ == 5) {
         return -69;
     } else {
         return 0;
@@ -56,12 +56,14 @@ int timer_callback(struct pollen_callback *callback, void *data) {
 
 int main(void) {
     struct pollen_loop *loop;
+    struct pollen_callback *callback;
     struct timespec timespec_first, timespec_second, timespec_diff;
 
     assert(clock_gettime(CLOCK_MONOTONIC, &timespec_first) == 0);
 
     assert((loop = pollen_loop_create()));
-    assert(pollen_loop_add_timer(loop, 100, timer_callback, &timespec_first));
+    assert((callback = pollen_loop_add_timer(loop, timer_callback, &timespec_first)));
+    assert(pollen_timer_arm(callback, 500, 100));
 
     assert(pollen_loop_run(loop) == -69);
 
@@ -69,7 +71,7 @@ int main(void) {
 
     timespec_diff = timespec_sub(&timespec_second, &timespec_first);
     fprintf(stderr, "%lus%lums\n", timespec_diff.tv_sec, timespec_diff.tv_nsec / 1000000L);
-    assert(timespec_diff.tv_nsec / 100000000L == 5);
+    assert(timespec_diff.tv_sec == 1);
 
     pollen_loop_cleanup(loop);
 }
