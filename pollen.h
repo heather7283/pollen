@@ -119,7 +119,7 @@ struct pollen_callback *pollen_loop_add_timer(struct pollen_loop *loop, unsigned
 
 /*
  * This is a convenience wrapper around eventfd(2).
- * Use pollen_efd_notify() to increment the efd and cause the callback to run.
+ * Use pollen_efd_trigger() to increment the efd and cause the callback to run.
  * The efd will be automatically reset before running the callback.
  *
  * Returns NULL and sets errno on failure.
@@ -135,7 +135,7 @@ struct pollen_callback *pollen_loop_add_efd(struct pollen_loop *loop,
  *
  * Returns 0 on success, -1 on failure and sets errno.
  */
-int pollen_efd_notify(struct pollen_callback *callback, uint64_t n);
+int pollen_efd_trigger(struct pollen_callback *callback, uint64_t n);
 
 /*
  * Remove a callback from event loop.
@@ -724,11 +724,11 @@ err:
     return NULL;
 }
 
-int pollen_efd_notify(struct pollen_callback *callback, uint64_t n) {
+int pollen_efd_trigger(struct pollen_callback *callback, uint64_t n) {
     int save_errno;
 
     if (callback->type != POLLEN_CALLBACK_TYPE_EFD) {
-        POLLEN_LOG_ERR("passed non-efd type callback to pollen_efd_notify");
+        POLLEN_LOG_ERR("passed non-efd type callback to pollen_efd_trigger");
         save_errno = EINVAL;
         goto err;
     }
