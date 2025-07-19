@@ -162,7 +162,7 @@ struct pollen_callback *pollen_loop_add_efd(struct pollen_loop *loop,
  *
  * Returns 0 on success, -1 on failure and sets errno.
  */
-int pollen_efd_trigger(struct pollen_callback *callback, uint64_t n);
+bool pollen_efd_trigger(struct pollen_callback *callback, uint64_t n);
 
 /*
  * Remove a callback from event loop.
@@ -823,13 +823,13 @@ err:
     return NULL;
 }
 
-int pollen_efd_trigger(struct pollen_callback *callback, uint64_t n) {
+bool pollen_efd_trigger(struct pollen_callback *callback, uint64_t n) {
     int save_errno;
 
     if (callback->type != POLLEN_CALLBACK_TYPE_EFD) {
         POLLEN_LOG_ERR("passed non-efd type callback to pollen_efd_trigger");
-	save_errno = EINVAL;
-	goto err;
+        save_errno = EINVAL;
+        goto err;
     }
 
     if (write(callback->as.efd.efd, &n, sizeof(n)) < 0) {
@@ -838,11 +838,11 @@ int pollen_efd_trigger(struct pollen_callback *callback, uint64_t n) {
         goto err;
     }
 
-    return 0;
+    return true;
 
 err:
     errno = save_errno;
-    return -1;
+    return false;
 }
 
 void pollen_loop_remove_callback(struct pollen_callback *callback) {

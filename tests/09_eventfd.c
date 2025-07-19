@@ -23,7 +23,7 @@ int main(void) {
     int foo = 228;
     assert((callback = pollen_loop_add_efd(loop, efd_callback, &foo)));
 
-    assert(pollen_efd_trigger(callback, 100500) == 0);
+    assert(pollen_efd_trigger(callback, 100500));
     assert(pollen_loop_run(loop) == -100500);
 
     pollen_loop_cleanup(loop);
