@@ -120,6 +120,8 @@ struct pollen_callback *pollen_loop_add_timer(struct pollen_loop *loop, unsigned
  *
  * For fd callbacks, this function will close the fd if autoclose=true.
  * For signal callbacks, this function will unblock the signal.
+ *
+ * Passing NULL is a harmless no-op.
  */
 void pollen_loop_remove_callback(struct pollen_callback *callback);
 
@@ -654,6 +656,10 @@ err:
 }
 
 void pollen_loop_remove_callback(struct pollen_callback *callback) {
+    if (callback == NULL) {
+        return;
+    }
+
     switch (callback->type) {
     case POLLEN_CALLBACK_TYPE_FD: {
         int fd = callback->as.fd.fd;
