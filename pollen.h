@@ -88,6 +88,14 @@ struct pollen_callback *pollen_loop_add_fd(struct pollen_loop *loop,
                                            void *data);
 
 /*
+ * Modifies fd callback by calling epoll_ctl(2) with EPOLL_CTL_MOD.
+ * Argument new_events directly corresponds to epoll_event.events field.
+ *
+ * Sets errno and returns false on failure, true on success.
+ */
+bool pollen_fd_modify_events(struct pollen_callback *callback, uint32_t new_events);
+
+/*
  * Adds a callback that will run unconditionally on every event loop iteration,
  * after all other callback types were processed.
  * Callbacks with higher priority will run before callbacks with lower priority.
@@ -495,6 +503,36 @@ err:
     POLLEN_FREE(new_callback);
     errno = save_errno;
     return NULL;
+}
+
+bool pollen_fd_modify_events(struct pollen_callback *callback, uint32_t new_events) {
+    int save_errno;
+
+    if (callback->type != POLLEN_CALLBACK_TYPE_FD) {
+        POLLEN_LOG_ERR("passed non-fd type callback to pollen_fd_modify_events");
+        save_errno = EINVAL;
+        goto err;
+    }
+
+    POLLEN_LOG_DEBUG("modifying events for fd %d, new_events: %d",
+                     callback->as.fd.fd, new_events);
+
+    struct epoll_event ev;
+    ev.data.ptr = callback;
+    ev.events = new_events;
+
+    if (epoll_ctl(callback->loop->epoll_fd, EPOLL_CTL_MOD, callback->as.fd.fd, &ev) < 0) {
+        save_errno = errno;
+        POLLEN_LOG_ERR("failed to modify events for fd %d: %s",
+                       callback->as.fd.fd, strerror(errno));
+        goto err;
+    }
+
+    return true;
+
+err:
+    errno = save_errno;
+    return false;
 }
 
 struct pollen_callback *pollen_loop_add_idle(struct pollen_loop *loop, int priority,
