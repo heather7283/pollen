@@ -737,9 +737,13 @@ bool pollen_timer_arm(struct pollen_callback *callback,
     int save_errno = 0;
 
     if (callback->type != POLLEN_CALLBACK_TYPE_TIMER) {
+        POLLEN_LOG_ERR("passed non-timer type callback to pollen_timer_arm");
         save_errno = EINVAL;
         goto err;
     }
+
+    POLLEN_LOG_DEBUG("arming timerfd %d for %lu ms initial, %lu ms periodic",
+                     callback->as.timer.fd, initial_ms, periodic_ms);
 
     struct itimerspec itimerspec;
     itimerspec.it_value.tv_sec = initial_ms / 1000;
@@ -765,9 +769,13 @@ bool pollen_timer_arm_ns(struct pollen_callback *callback,
     int save_errno = 0;
 
     if (callback->type != POLLEN_CALLBACK_TYPE_TIMER) {
+        POLLEN_LOG_ERR("passed non-timer type callback to pollen_timer_arm_ns");
         save_errno = EINVAL;
         goto err;
     }
+
+    POLLEN_LOG_DEBUG("arming timerfd %d for %lu ns initial, %lu ns periodic",
+                     callback->as.timer.fd, initial_ns, periodic_ns);
 
     struct itimerspec itimerspec;
     itimerspec.it_value.tv_sec = initial_ns / 1000000000;
@@ -792,9 +800,12 @@ bool pollen_timer_disarm(struct pollen_callback *callback) {
     int save_errno = 0;
 
     if (callback->type != POLLEN_CALLBACK_TYPE_TIMER) {
+        POLLEN_LOG_ERR("passed non-timer type callback to pollen_timer_disarm");
         save_errno = EINVAL;
         goto err;
     }
+
+    POLLEN_LOG_DEBUG("disarming timerfd %d", callback->as.timer.fd);
 
     struct itimerspec itimerspec;
     itimerspec.it_value.tv_sec = 0;
