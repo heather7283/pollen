@@ -996,7 +996,7 @@ int pollen_loop_run(struct pollen_loop *loop) {
 
     int ret = 0;
     int number_fds = -1;
-    struct epoll_event events[POLLEN_EPOLL_MAX_EVENTS];
+    static struct epoll_event events[POLLEN_EPOLL_MAX_EVENTS];
 
     loop->should_quit = false;
     while (!loop->should_quit) {
