@@ -106,7 +106,8 @@ int main(void) {
     char *sus = "amogus"; /* you can pass any arbitrary pointer to callback */
 
     /* This callback will run every 5 seconds */
-    pollen_loop_add_timer(loop, 5000 /* milliseconds */, timer_callback, sus);
+    struct pollen_callback *timer = pollen_loop_add_timer(loop, timer_callback, sus);
+    pollen_timer_arm(timer, 5000, 5000);
 
     /*
      * Those callbacks will run on every event loop iteration after all other callback types
