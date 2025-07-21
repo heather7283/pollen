@@ -8,6 +8,9 @@
  *   #include "pollen.h"
  *
  * COMPILE-TIME TUNABLES:
+ *   POLLEN_EPOLL_MAX_EVENTS - Maximum amount of events processed during one loop iteration.
+ *     Default: #define POLLEN_EPOLL_MAX_EVENTS 32
+ *
  *   POLLEN_CALLOC(n, size) - calloc()-like function that will be used to allocate memory.
  *     Default: #define POLLEN_CALLOC(n, size) calloc(n, size)
  *   POLLEN_FREE(ptr) - free()-like function that will be used to free memory.
@@ -28,6 +31,10 @@
 
 #ifndef POLLEN_H
 #define POLLEN_H
+
+#if !defined(POLLEN_EPOLL_MAX_EVENTS)
+    #define POLLEN_EPOLL_MAX_EVENTS 32
+#endif
 
 #if !defined(POLLEN_CALLOC) || !defined(POLLEN_FREE)
     #include <stdlib.h>
@@ -214,8 +221,6 @@ void pollen_loop_quit(struct pollen_loop *loop, int retcode);
 #include <stdbool.h>
 #include <string.h>
 #include <fcntl.h>
-
-#define POLLEN_EPOLL_MAX_EVENTS 16
 
 #if defined(__STDC_VERSION__) && __STDC_VERSION__ >= 202311L
     #define POLLEN_TYPEOF(expr) typeof(expr)
