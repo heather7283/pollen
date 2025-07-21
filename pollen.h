@@ -1,5 +1,5 @@
 /*
- * pollen version 2.1.0
+ * pollen version 2.1.1
  * latest version is available at: https://github.com/heather7283/pollen
  *
  * This is a single-header library that provides simple event loop abstraction built on epoll.

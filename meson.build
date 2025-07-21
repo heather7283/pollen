@@ -1,6 +1,6 @@
 project('pollen','c',
         license: 'MIT',
-        version: '2.1.0',
+        version: '2.1.1',
         default_options: ['warning_level=3'])
 
 subdir('tests')
