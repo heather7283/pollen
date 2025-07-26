@@ -460,6 +460,9 @@ void pollen_loop_cleanup(struct pollen_loop *loop) {
     POLLEN_LL_FOR_EACH_SAFE(callback, callback_tmp, &loop->timer_callbacks_list, link) {
         pollen_loop_remove_callback(callback);
     }
+    POLLEN_LL_FOR_EACH_SAFE(callback, callback_tmp, &loop->efd_callbacks_list, link) {
+        pollen_loop_remove_callback(callback);
+    }
 
     if (loop->signal_fd > 0) {
         close(loop->signal_fd);
