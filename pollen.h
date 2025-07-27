@@ -175,7 +175,7 @@ struct pollen_callback *pollen_loop_add_efd(struct pollen_loop *loop,
  * causing it to run on the next event loop iteration.
  * Callback must have been created by a call to pollen_loop_add_efd().
  *
- * Returns 0 on success, -1 on failure and sets errno.
+ * Returns true on success, false on failure and sets errno.
  */
 bool pollen_efd_trigger(struct pollen_callback *callback, uint64_t n);
 
