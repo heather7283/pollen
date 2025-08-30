@@ -4,7 +4,8 @@ project('pollen','c',
         meson_version: '>=1.1.0',
         default_options: ['warning_level=3'])
 
-pollen_dep = declare_dependency(include_directories: include_directories('.'))
+pollen_dep = declare_dependency(include_directories: include_directories('.'),
+                                compile_args: ['-D_GNU_SOURCE'])
 meson.override_dependency('pollen', pollen_dep)
 
 if get_option('test')
