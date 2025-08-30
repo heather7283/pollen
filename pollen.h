@@ -204,13 +204,20 @@ struct pollen_callback *pollen_loop_add_efd(struct pollen_loop *loop,
                                             void *data);
 
 /*
- * Write n to the efd corresponding to callback,
- * causing it to run on the next event loop iteration.
+ * Increment efd by 1, causing the callback to run on the next loop iteration.
  * Callback must have been created by a call to pollen_loop_add_efd().
  *
  * Returns true on success, false on failure and sets errno.
  */
-bool pollen_efd_trigger(struct pollen_callback *callback, uint64_t n);
+bool pollen_efd_trigger(struct pollen_callback *callback);
+
+/*
+ * Increment efd by n, causing the callback to run on the next loop iteration.
+ * Callback must have been created by a call to pollen_loop_add_efd().
+ *
+ * Returns true on success, false on failure and sets errno.
+ */
+bool pollen_efd_inc(struct pollen_callback *callback, uint64_t n);
 
 /*
  * Remove a callback from event loop.
@@ -932,7 +939,7 @@ err:
     return NULL;
 }
 
-bool pollen_efd_trigger(struct pollen_callback *callback, uint64_t n) {
+bool pollen_efd_inc(struct pollen_callback *callback, uint64_t n) {
     int save_errno;
 
     if (callback->type != POLLEN_CALLBACK_TYPE_EFD) {
@@ -943,7 +950,8 @@ bool pollen_efd_trigger(struct pollen_callback *callback, uint64_t n) {
 
     if (write(callback->as.efd.efd, &n, sizeof(n)) < 0) {
         save_errno = errno;
-        POLLEN_LOG_ERR("failed to write to efd %d: %s", callback->as.efd.efd, strerror(errno));
+        POLLEN_LOG_ERR("failed to write %lu to efd %d: %s",
+                       n, callback->as.efd.efd, strerror(errno));
         goto err;
     }
 
@@ -952,6 +960,10 @@ bool pollen_efd_trigger(struct pollen_callback *callback, uint64_t n) {
 err:
     errno = save_errno;
     return false;
+}
+
+bool pollen_efd_trigger(struct pollen_callback *callback) {
+    return pollen_efd_inc(callback, 1);
 }
 
 void pollen_loop_remove_callback(struct pollen_callback *callback) {
