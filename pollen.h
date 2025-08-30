@@ -32,6 +32,8 @@
 #ifndef POLLEN_H
 #define POLLEN_H
 
+#define _GNU_SOURCE
+
 #if !defined(POLLEN_EPOLL_MAX_EVENTS)
     #define POLLEN_EPOLL_MAX_EVENTS 32
 #endif
