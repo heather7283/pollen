@@ -127,29 +127,62 @@ struct pollen_callback *pollen_loop_add_signal(struct pollen_loop *loop, int sig
 /*
  * Adds a timerfd-based timer callback.
  * Arm/disarm the timer with pollen_timer_arm/disarm functions.
+ * See timerfd_create(2) for description of clockid argument.
  *
  * Returns NULL and sets errno on failure.
  */
-struct pollen_callback *pollen_loop_add_timer(struct pollen_loop *loop,
+struct pollen_callback *pollen_loop_add_timer(struct pollen_loop *loop, int clockid,
                                               pollen_timer_callback_fn callback,
                                               void *data);
 
 /*
- * Arms the timer to expire once after initial_ms milliseconds,
- * and then repeatedly every periodic_ms milliseconds.
+ * Arms the timer to expire once after initial timespec,
+ * and then repeatedly every periodic timespec.
+ * If absolute is true, initial is an absolute value instead of relative.
  *
  * Sets errno and returns false on failre, true on success.
  */
-bool pollen_timer_arm(struct pollen_callback *callback,
-                      unsigned long initial_ms, unsigned long periodic_ms);
+bool pollen_timer_arm(struct pollen_callback *callback, bool absolute,
+                      struct timespec initial, struct timespec periodic);
+
+/*
+ * Arms the timer to expire once after initial_s seconds,
+ * and then repeatedly every periodic_s seconds.
+ * If absolute is true, initial_s is an absolute value instead of relative.
+ *
+ * Sets errno and returns false on failre, true on success.
+ */
+bool pollen_timer_arm_s(struct pollen_callback *callback, bool absolute,
+                        unsigned long initial_s, unsigned long periodic_s);
+
+/*
+ * Arms the timer to expire once after initial_ms milliseconds,
+ * and then repeatedly every periodic_ms milliseconds.
+ * If absolute is true, initial_ms is an absolute value instead of relative.
+ *
+ * Sets errno and returns false on failre, true on success.
+ */
+bool pollen_timer_arm_ms(struct pollen_callback *callback, bool absolute,
+                         unsigned long initial_ms, unsigned long periodic_ms);
+
+/*
+ * Arms the timer to expire once after initial_us microseconds,
+ * and then repeatedly every periodic_us microseconds.
+ * If absolute is true, initial_us is an absolute value instead of relative.
+ *
+ * Sets errno and returns false on failre, true on success.
+ */
+bool pollen_timer_arm_us(struct pollen_callback *callback, bool absolute,
+                         unsigned long initial_us, unsigned long periodic_us);
 
 /*
  * Arms the timer to expire once after initial_ns nanoseconds,
  * and then repeatedly every periodic_ns nanoseconds.
+ * If absolute is true, initial_ns is an absolute value instead of relative.
  *
  * Sets errno and returns false on failre, true on success.
  */
-bool pollen_timer_arm_ns(struct pollen_callback *callback,
+bool pollen_timer_arm_ns(struct pollen_callback *callback, bool absolute,
                          unsigned long initial_ns, unsigned long periodic_ns);
 
 /*
@@ -690,16 +723,16 @@ err:
     return NULL;
 }
 
-struct pollen_callback *pollen_loop_add_timer(struct pollen_loop *loop,
+struct pollen_callback *pollen_loop_add_timer(struct pollen_loop *loop, int clockid,
                                               pollen_timer_callback_fn callback,
                                               void *data) {
     struct pollen_callback *new_callback = NULL;
     int save_errno = 0;
     int tfd = -1;
 
-    POLLEN_LOG_INFO("adding timer callback to event loop");
+    POLLEN_LOG_INFO("adding timer callback to event loop, clockid %d", clockid);
 
-    tfd = timerfd_create(CLOCK_MONOTONIC, TFD_NONBLOCK | TFD_CLOEXEC);
+    tfd = timerfd_create(clockid, TFD_NONBLOCK | TFD_CLOEXEC);
     if (tfd < 0) {
         save_errno = errno;
         POLLEN_LOG_ERR("failed to create timerfd: %s", strerror(errno));
@@ -740,8 +773,8 @@ err:
     return NULL;
 }
 
-bool pollen_timer_arm(struct pollen_callback *callback,
-                      unsigned long initial_ms, unsigned long periodic_ms) {
+bool pollen_timer_arm(struct pollen_callback *callback, bool absolute,
+                      struct timespec initial, struct timespec periodic) {
     int save_errno = 0;
 
     if (callback->type != POLLEN_CALLBACK_TYPE_TIMER) {
@@ -750,16 +783,17 @@ bool pollen_timer_arm(struct pollen_callback *callback,
         goto err;
     }
 
-    POLLEN_LOG_DEBUG("arming timerfd %d for %lu ms initial, %lu ms periodic",
-                     callback->as.timer.fd, initial_ms, periodic_ms);
+    POLLEN_LOG_DEBUG("arming timerfd %d for (%li s %li ns) initial, (%li s %li ns) periodic",
+                     callback->as.timer.fd,
+                     initial.tv_sec, initial.tv_nsec,
+                     periodic.tv_sec, periodic.tv_nsec);
 
-    struct itimerspec itimerspec;
-    itimerspec.it_value.tv_sec = initial_ms / 1000;
-    itimerspec.it_value.tv_nsec = (initial_ms % 1000) * 1000000L;
-    itimerspec.it_interval.tv_sec = periodic_ms / 1000;
-    itimerspec.it_interval.tv_nsec = (periodic_ms % 1000) * 1000000L;
-
-    if (timerfd_settime(callback->as.timer.fd, 0, &itimerspec, NULL) < 0) {
+    const struct itimerspec itimerspec = {
+        .it_value = initial,
+        .it_interval = periodic,
+    };
+    const int flags = absolute ? TFD_TIMER_ABSTIME : 0;
+    if (timerfd_settime(callback->as.timer.fd, flags, &itimerspec, NULL) < 0) {
         save_errno = errno;
         POLLEN_LOG_ERR("failed to arm timer: %s", strerror(errno));
         goto err;
@@ -772,36 +806,54 @@ err:
     return false;
 }
 
-bool pollen_timer_arm_ns(struct pollen_callback *callback,
+bool pollen_timer_arm_s(struct pollen_callback *callback, bool absolute,
+                        unsigned long initial_s, unsigned long periodic_s) {
+    const struct timespec initial = {
+        .tv_sec = initial_s
+    };
+    const struct timespec periodic = {
+        .tv_sec = periodic_s
+    };
+    return pollen_timer_arm(callback, absolute, initial, periodic);
+}
+
+bool pollen_timer_arm_ms(struct pollen_callback *callback, bool absolute,
+                         unsigned long initial_ms, unsigned long periodic_ms) {
+    const struct timespec initial = {
+        .tv_sec = initial_ms / 1000,
+        .tv_nsec = (initial_ms % 1000) * 1000000,
+    };
+    const struct timespec periodic = {
+        .tv_sec = periodic_ms / 1000,
+        .tv_nsec = (periodic_ms % 1000) * 1000000,
+    };
+    return pollen_timer_arm(callback, absolute, initial, periodic);
+}
+
+bool pollen_timer_arm_us(struct pollen_callback *callback, bool absolute,
+                         unsigned long initial_us, unsigned long periodic_us) {
+    const struct timespec initial = {
+        .tv_sec = initial_us / 1000000,
+        .tv_nsec = (initial_us % 1000000) * 1000,
+    };
+    const struct timespec periodic = {
+        .tv_sec = periodic_us / 1000000,
+        .tv_nsec = (periodic_us % 1000000) * 1000,
+    };
+    return pollen_timer_arm(callback, absolute, initial, periodic);
+}
+
+bool pollen_timer_arm_ns(struct pollen_callback *callback, bool absolute,
                          unsigned long initial_ns, unsigned long periodic_ns) {
-    int save_errno = 0;
-
-    if (callback->type != POLLEN_CALLBACK_TYPE_TIMER) {
-        POLLEN_LOG_ERR("passed non-timer type callback to pollen_timer_arm_ns");
-        save_errno = EINVAL;
-        goto err;
-    }
-
-    POLLEN_LOG_DEBUG("arming timerfd %d for %lu ns initial, %lu ns periodic",
-                     callback->as.timer.fd, initial_ns, periodic_ns);
-
-    struct itimerspec itimerspec;
-    itimerspec.it_value.tv_sec = initial_ns / 1000000000;
-    itimerspec.it_value.tv_nsec = initial_ns % 1000000000;
-    itimerspec.it_interval.tv_sec = periodic_ns / 1000000000;
-    itimerspec.it_interval.tv_nsec = periodic_ns % 1000000000;
-
-    if (timerfd_settime(callback->as.timer.fd, 0, &itimerspec, NULL) < 0) {
-        save_errno = errno;
-        POLLEN_LOG_ERR("failed to arm timer: %s", strerror(errno));
-        goto err;
-    }
-
-    return true;
-
-err:
-    errno = save_errno;
-    return false;
+    const struct timespec initial = {
+        .tv_sec = initial_ns / 1000000000,
+        .tv_nsec = initial_ns % 1000000000,
+    };
+    const struct timespec periodic = {
+        .tv_sec = periodic_ns / 1000000000,
+        .tv_nsec = periodic_ns % 1000000000,
+    };
+    return pollen_timer_arm(callback, absolute, initial, periodic);
 }
 
 bool pollen_timer_disarm(struct pollen_callback *callback) {

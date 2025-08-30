@@ -62,8 +62,9 @@ int main(void) {
     assert(clock_gettime(CLOCK_MONOTONIC, &timespec_first) == 0);
 
     assert((loop = pollen_loop_create()));
-    assert((callback = pollen_loop_add_timer(loop, timer_callback, &timespec_first)));
-    assert(pollen_timer_arm(callback, 500, 100));
+    assert((callback = pollen_loop_add_timer(loop, CLOCK_MONOTONIC,
+                                             timer_callback, &timespec_first)));
+    assert(pollen_timer_arm_ms(callback, false, 500, 100));
 
     assert(pollen_loop_run(loop) == -69);
 
