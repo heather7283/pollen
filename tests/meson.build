@@ -18,7 +18,7 @@ add_project_arguments('-Wno-unused-parameter', language: 'c')
 
 foreach test_source: test_sources
   test_name = test_source.split('.')[0]
-  test_exe = executable(test_name, test_source, include_directories: ['..'])
+  test_exe = executable(test_name, test_source, dependencies: [pollen_dep])
   test(test_name, test_exe)
 endforeach
 

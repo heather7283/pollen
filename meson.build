@@ -3,10 +3,10 @@ project('pollen','c',
         version: '3.0.0',
         default_options: ['warning_level=3'])
 
-subdir('tests')
+pollen_dep = declare_dependency(include_directories: include_directories('.'))
+meson.override_dependency('pollen', pollen_dep)
 
-pollen = declare_dependency(include_directories: '.')
-meson.override_dependency('pollen', pollen)
+subdir('tests')
 
 if not meson.is_subproject()
   install_headers('pollen.h')
