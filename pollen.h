@@ -47,16 +47,16 @@
 #endif
 
 #if !defined(POLLEN_LOG_DEBUG)
-    #define POLLEN_LOG_DEBUG(...) #__VA_ARGS__
+    #define POLLEN_LOG_DEBUG(...) (void)(#__VA_ARGS__)
 #endif
 #if !defined(POLLEN_LOG_INFO)
-    #define POLLEN_LOG_INFO(...) #__VA_ARGS__
+    #define POLLEN_LOG_INFO(...) (void)(#__VA_ARGS__)
 #endif
 #if !defined(POLLEN_LOG_WARN)
-    #define POLLEN_LOG_WARN(...) #__VA_ARGS__
+    #define POLLEN_LOG_WARN(...) (void)(#__VA_ARGS__)
 #endif
 #if !defined(POLLEN_LOG_ERR)
-    #define POLLEN_LOG_ERR(...) #__VA_ARGS__
+    #define POLLEN_LOG_ERR(...) (void)(#__VA_ARGS__)
 #endif
 
 #include <sys/timerfd.h>
